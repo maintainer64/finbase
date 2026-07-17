@@ -1,0 +1,236 @@
+package main
+
+import (
+	"testing"
+	"time"
+
+	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
+)
+
+func TestCompareText(t *testing.T) {
+	tests := []struct {
+		actual, operator, expected string
+		want                       bool
+	}{
+		{"Оплата РЖД Москва", "like", "ржд", true},
+		{"  Яндекс Лавка  ", "=", "яндекс лавка", true},
+		{"МТС Mobile +7", "starts_with", "мтс", true},
+		{"Проценты на остаток", "ends_with", "остаток", true},
+		{"Кафе", "not_like", "такси", true},
+		{"Кафе", "like", "такси", false},
+		{"Кафе", "unknown", "кафе", false},
+	}
+	for _, test := range tests {
+		if got := compareText(test.actual, test.operator, test.expected); got != test.want {
+			t.Errorf("compareText(%q, %q, %q) = %v; want %v", test.actual, test.operator, test.expected, got, test.want)
+		}
+	}
+}
+
+func TestCompareNumber(t *testing.T) {
+	if !compareNumber(1500, ">=", "1500") {
+		t.Fatal("1500 must be >= 1500")
+	}
+	if compareNumber(1499, ">=", 1500) {
+		t.Fatal("1499 must not be >= 1500")
+	}
+	if compareNumber(10, "=", "not-a-number") {
+		t.Fatal("invalid expected number must not match")
+	}
+}
+
+func TestTransferWindow(t *testing.T) {
+	t.Setenv("FINBASE_TRANSFER_WINDOW_MINUTES", "45")
+	if got := transferWindow(); got != 45*time.Minute {
+		t.Fatalf("transferWindow() = %s; want 45m", got)
+	}
+
+	t.Setenv("FINBASE_TRANSFER_WINDOW_MINUTES", "invalid")
+	if got := transferWindow(); got != 30*time.Minute {
+		t.Fatalf("invalid transferWindow() = %s; want default 30m", got)
+	}
+
+	t.Setenv("FINBASE_TRANSFER_WINDOW_MINUTES", "1441")
+	if got := transferWindow(); got != 30*time.Minute {
+		t.Fatalf("out-of-range transferWindow() = %s; want default 30m", got)
+	}
+}
+
+func TestReportingTimezoneOffset(t *testing.T) {
+	t.Setenv("FINBASE_TIMEZONE_OFFSET", "+05:00")
+	if got := reportingTimezoneOffset(); got != "+05:00" {
+		t.Fatalf("reportingTimezoneOffset() = %q; want +05:00", got)
+	}
+
+	for _, invalid := range []string{"UTC", "+15:00", "+05:99", "+5:00", "+14:30"} {
+		t.Setenv("FINBASE_TIMEZONE_OFFSET", invalid)
+		if got := reportingTimezoneOffset(); got != defaultReportingTimezoneOffset {
+			t.Errorf("reportingTimezoneOffset(%q) = %q; want default", invalid, got)
+		}
+	}
+}
+
+func TestAcceptedTransferAssignsSystemCategory(t *testing.T) {
+	app := pocketbase.NewWithConfig(pocketbase.Config{DefaultDataDir: t.TempDir()})
+	registerAutomation(app)
+	if err := app.Bootstrap(); err != nil {
+		t.Fatal(err)
+	}
+	defer app.ResetBootstrapState()
+	if err := app.RunAllMigrations(); err != nil {
+		t.Fatal(err)
+	}
+
+	users, err := app.FindCollectionByNameOrId("users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := core.NewRecord(users)
+	user.SetEmail("transfer-test@example.com")
+	user.SetPassword("transfer-test-password")
+	if err := app.Save(user); err != nil {
+		t.Fatal(err)
+	}
+
+	accounts, err := app.FindCollectionByNameOrId("accounts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	createAccount := func(name, externalID string) *core.Record {
+		record := core.NewRecord(accounts)
+		record.Set("name", name)
+		record.Set("type", "checking")
+		record.Set("owner", user.Id)
+		record.Set("currency", "RUB")
+		record.Set("external_id", externalID)
+		if err := app.Save(record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	from := createAccount("Источник", "transfer-test-from")
+	to := createAccount("Получатель", "transfer-test-to")
+
+	transactions, err := app.FindCollectionByNameOrId("transactions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	createTransaction := func(account *core.Record, amount float64, date, externalID string) *core.Record {
+		record := core.NewRecord(transactions)
+		record.Set("account", account.Id)
+		record.Set("date", date)
+		record.Set("amount", amount)
+		record.Set("currency", "RUB")
+		record.Set("note", "Внутренний перевод")
+		record.Set("external_id", externalID)
+		if err := app.Save(record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	outflow := createTransaction(from, -1500, "2026-08-20 10:00:00.000Z", "transfer-test-out")
+	inflow := createTransaction(to, 1500, "2026-08-20 12:00:00.000Z", "transfer-test-in")
+	regularCategory, err := app.FindFirstRecordByData("categories", "name", "Дом")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transaction := range []*core.Record{inflow, outflow} {
+		transaction.Set("category", regularCategory.Id)
+		if err := app.Save(transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	transfers, err := app.FindCollectionByNameOrId("transfers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transfer := core.NewRecord(transfers)
+	transfer.Set("inflow_transaction", inflow.Id)
+	transfer.Set("outflow_transaction", outflow.Id)
+	transfer.Set("status", "accepted")
+	if err := app.Save(transfer); err != nil {
+		t.Fatal(err)
+	}
+
+	category, err := app.FindFirstRecordByData("categories", "name", transferCategoryName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{inflow.Id, outflow.Id} {
+		transaction, err := app.FindRecordById("transactions", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := transaction.GetString("category"); got != category.Id {
+			t.Fatalf("transaction %s category = %q; want %q", id, got, category.Id)
+		}
+	}
+
+	var reportRows int
+	if err := app.DB().NewQuery("SELECT count(*) FROM flow_splits").Row(&reportRows); err != nil {
+		t.Fatal(err)
+	}
+	if reportRows != 0 {
+		t.Fatalf("confirmed transfer produced %d flow_splits rows; want 0", reportRows)
+	}
+
+	wrongDirection := core.NewRecord(transfers)
+	wrongDirection.Set("inflow_transaction", outflow.Id)
+	wrongDirection.Set("outflow_transaction", inflow.Id)
+	wrongDirection.Set("status", "rejected")
+	if err := app.Save(wrongDirection); err == nil {
+		t.Fatal("transfer with expense as inflow and income as outflow must be rejected")
+	}
+
+	anotherOutflow := createTransaction(from, -1500, "2026-08-20 14:00:00.000Z", "transfer-test-another-out")
+	duplicate := core.NewRecord(transfers)
+	duplicate.Set("inflow_transaction", inflow.Id)
+	duplicate.Set("outflow_transaction", anotherOutflow.Id)
+	duplicate.Set("status", "pending")
+	if err := app.Save(duplicate); err == nil {
+		t.Fatal("transaction already used in an active transfer must not be reused")
+	}
+
+	// Автодетектор не должен связывать операцию, если категория заполнена хотя
+	// бы у одной стороны пары.
+	categorizedOutflow := createTransaction(from, -2101, "2026-08-20 16:00:00.000Z", "transfer-categorized-out")
+	categorizedOutflow.Set("category", regularCategory.Id)
+	if err := app.Save(categorizedOutflow); err != nil {
+		t.Fatal(err)
+	}
+	createTransaction(to, 2101, "2026-08-20 16:01:00.000Z", "transfer-uncategorized-in")
+
+	createTransaction(from, -2202, "2026-08-20 17:00:00.000Z", "transfer-uncategorized-out")
+	categorizedInflow := core.NewRecord(transactions)
+	categorizedInflow.Set("account", to.Id)
+	categorizedInflow.Set("category", regularCategory.Id)
+	categorizedInflow.Set("date", "2026-08-20 17:01:00.000Z")
+	categorizedInflow.Set("amount", 2202)
+	categorizedInflow.Set("currency", "RUB")
+	categorizedInflow.Set("note", "Уже размеченная операция")
+	categorizedInflow.Set("external_id", "transfer-categorized-in")
+	if err := app.Save(categorizedInflow); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := app.FindRecordsByFilter("transfers", "status = 'pending'", "created", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("categorized transactions produced %d pending transfers; want 0", len(pending))
+	}
+
+	// Две неразмеченные операции по-прежнему должны дать предложение.
+	createTransaction(from, -2303, "2026-08-20 18:00:00.000Z", "transfer-clean-out")
+	createTransaction(to, 2303, "2026-08-20 18:01:00.000Z", "transfer-clean-in")
+	pending, err = app.FindRecordsByFilter("transfers", "status = 'pending'", "created", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("uncategorized pair produced %d pending transfers; want 1", len(pending))
+	}
+}

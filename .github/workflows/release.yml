@@ -1,0 +1,97 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish, for example v1.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        run: |
+          package_version="$(node --print "require('./package.json').version")"
+          test "$RELEASE_TAG" = "v$package_version"
+
+      - name: Test and build
+        run: |
+          pnpm lint
+          pnpm exec tsc --noEmit
+          pnpm test
+          pnpm build
+
+      - name: Prepare artifact and checksum
+        run: |
+          artifact="finbase-extension-$RELEASE_TAG.zip"
+          mv build.zip "$artifact"
+          sha256sum "$artifact" >"$artifact.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: finbase-extension-${{ env.RELEASE_TAG }}
+          path: |
+            frontend/finbase-extension-${{ env.RELEASE_TAG }}.zip
+            frontend/finbase-extension-${{ env.RELEASE_TAG }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=(
+            "finbase-extension-$RELEASE_TAG.zip"
+            "finbase-extension-$RELEASE_TAG.zip.sha256"
+          )
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --generate-notes \
+              --title "Finbase $RELEASE_TAG" \
+              --verify-tag
+          fi
