@@ -1,0 +1,39 @@
+# Compiled JavaScript and Source Maps
+dist/
+build/
+build.zip
+/frontend/finbase/
+out/
+debug.*
+
+# Node.js modules
+node_modules/
+.playwright-mcp/
+
+# Editor and OS specific files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+pb_data/
+.pb-data/
+.pnpm-store/
+
+# Finbase local binary (go build)
+backend/finbase
+backend/finbase-test
+
+# Environment variables
+.env
+.env.local
+
+# Test coverage reports
+coverage/
+
+# TypeScript specific
+*.tsbuildinfo
