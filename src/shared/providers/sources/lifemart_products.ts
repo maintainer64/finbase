@@ -53,9 +53,11 @@ export const lifeMartProducts: ProviderAny = {
     baseUrlLogo: () => {
         return "lifemart.ru"
     },
+    getConfigKeys: () => ['general-max-transactions', 'user-name', 'accounts', 'date-start', 'date-end'],
+
     getProducts: async (params: ProviderParams): Promise<Product[]> => {
         const rows: Product[] = [];
-        const maxLimit = getMaxTransactions(params.maxTransactions);
+        const maxLimit = getMaxTransactions(params.config['general-max-transactions']);
         const orders = await getOrdersByMaxLimit(maxLimit);
         for (const order of orders) {
             if (order?.status?.complete !== true) {

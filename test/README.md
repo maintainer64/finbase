@@ -50,41 +50,37 @@ docker compose -f test/compose.sure.yml down -v
 > На macOS `localhost` может резолвиться в IPv6 и не отвечать — используйте
 > `127.0.0.1`, как в примере выше.
 
-## Отключённые CSRF и Origin
+## CSRF и Origin для расширения
 
-В тестовом стенде проверки CSRF-токена и заголовка `Origin` **отключены**: это
-позволяет дёргать web-формы Sure (создание счетов) без выпарсивания
-`authenticity_token` из HTML и без подмены `Origin`.
+Тестовый стенд **не отключает** CSRF: Sure в self-hosted режиме работает с
+обычной Rails-защитой (cookie `_sure_session` + `X-CSRF-Token`), и расширение
+проходит её как настоящий браузер. Для этого в `test/nginx.conf`:
 
-Как устроено: `test/disable-csrf.rb` монтируется в контейнер как
-`config/initializers/zzz_disable_csrf.rb` и срабатывает только при `DISABLE_CSRF=true`
-(задан в `test/compose.sure.yml`). Без этой переменной файл ничего не делает, поэтому
-в боевой инстанс он попасть не может.
+- `proxy_set_header Origin $scheme://$host` — подменяет Origin на
+  `http://localhost`, чтобы Rails CSRF origin-check проходил (реальный
+  `chrome-extension://...` он бы отклонил);
+- CORS-блок — echo реального Origin клиента в `Access-Control-Allow-Origin`
+  (с `proxy_hide_header` поверх `*` от Sure), preflight (OPTIONS) отвечает
+  сам nginx;
+- `proxy_cookie_flags _sure_session samesite=none secure` и то же для
+  `session_token` — Chrome-расширение (cross-site контекст) не получает
+  cookie с `SameSite=Lax`, поэтому флаги переписываются. Работает по http
+  только на `localhost` (Chrome-исключение для Secure cookie); на другом
+  хосте нужен https.
 
-Проверить, что режим включён:
+Монтируемые initializer'ы: `sure-initializers/zzz_self_hosted_tweaks.rb`
+(отключает Rack::Attack при `SELF_HOSTED=true`) и
+`sure-initializers/trade_external_id.rb` (идемпотентность сделок по
+`external_id`).
+
+Проверить, что стенд поднят и флоу работает:
 
 ```bash
-docker compose -f test/compose.sure.yml logs web | grep CSRF
-# [TEST] CSRF и проверка Origin ОТКЛЮЧЕНЫ (DISABLE_CSRF=true)
+docker compose -f test/compose.sure.yml logs web | grep SELF_HOSTED
+# [SELF_HOSTED] Rack::Attack rate limiting ОТКЛЮЧЁН (SELF_HOSTED=true)
 ```
 
-Пример запроса без токена и с чужим `Origin` (должен вернуть 302, а не 422):
+Полный флоу «как расширение» (login → CSRF → создание аккаунта) — см.
+`test/sure-trades.test.ts` и `test/sure-integration.test.ts`.
 
-```bash
-curl -s -c /tmp/j -b /tmp/j -X POST $SURE_BASE_URL/sessions \
-  -H "Origin: https://evil.example.com" \
-  --data-urlencode "email=integration@example.com" \
-  --data-urlencode "password=password123" \
-  -o /dev/null -w "%{http_code}\n"
-```
-
-⚠️ Только для локального стенда и CI. Никогда не включайте `DISABLE_CSRF` на
-инстансе с реальными данными.
-
-### Нюансы реализации
-
-Флаги ставятся на класс через `ActiveSupport.on_load(:action_controller_base)`, а не
-присваиванием в `Rails.application.config.action_controller.*` — в production
-`ActionController` уже загружен (eager load), и конфиг к нему не применится.
-Хук именно `_base`: общий `:action_controller` срабатывает ещё и для
-`ActionController::API`, где CSRF-методов нет, и приложение падает на старте.
+⚠️ Флаги cookie и подмена Origin — только для локального стенда и CI.

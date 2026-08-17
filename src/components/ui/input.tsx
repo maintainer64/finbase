@@ -4,7 +4,7 @@ interface InputProps {
     id?: string;
     value: string;
     placeholder?: string;
-    type?: "text" | "password" | "email";
+    type?: "text" | "password" | "email" | "date" | "number";
     onChange: (value: string) => void;
     class?: string;
 }

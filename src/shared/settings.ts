@@ -5,6 +5,8 @@ import {useUniversalStorage} from "@/shared/hooks/useUniversalStorage";
 export const TINVEST_API_PROD = "https://invest-public-api.tbank.ru/rest";
 export const TINVEST_API_SANDBOX = "https://sandbox-invest-public-api.tbank.ru/rest";
 
+const storeCache = new Map<string, ReturnType<typeof useUniversalStorage>>();
+
 /**
  * Единая схема настроек — ЕДИНСТВЕННОЕ место, где заводится новая настройка.
  *
@@ -24,6 +26,8 @@ export const SETTINGS = {
     'tbank-invest-api-url': {default: TINVEST_API_PROD, label: 'Адрес T-Invest API'},
     'general-max-transactions': {default: '1000', label: 'Лимит операций'},
     'user-name': {default: '', label: 'Имя пользователя'},
+    'date-start': {default: '', label: 'Дата начала'},
+    'date-end': {default: '', label: 'Дата окончания'},
     'fetch-json-provider-data': {default: false, label: 'Показывать выгрузку в JSON (отладка)'},
     'onboarding-completed': {default: false, label: 'Онбординг пройден', exportable: false},
 } as const;
@@ -47,7 +51,10 @@ export const ALL_KEYS = Object.keys(SETTINGS) as SettingKey[];
  * значение по умолчанию берётся из схемы (не дублируется по файлам).
  */
 export function useSetting<K extends SettingKey>(key: K) {
-    return useUniversalStorage<SettingValue<K>>(key, SETTINGS[key].default as SettingValue<K>);
+    if (!storeCache.has(key)) {
+        storeCache.set(key, useUniversalStorage<SettingValue<K>>(key, SETTINGS[key].default as SettingValue<K>));
+    }
+    return storeCache.get(key) as ReturnType<typeof useUniversalStorage<SettingValue<K>>>;
 }
 
 /**
@@ -55,12 +62,17 @@ export function useSetting<K extends SettingKey>(key: K) {
  * Провайдер сам объявляет нужные ключи через getConfigKeys(), поэтому странице
  * не нужно знать, какая настройка какому источнику принадлежит.
  */
-export function useSettingsSnapshot(): (keys?: readonly SettingKey[]) => Record<string, string> {
-    // Список ключей статичен — хуки в цикле безопасны.
+export function useSettingsSnapshot(): (keys?: readonly string[]) => Record<string, string> {
     const stores = Object.fromEntries(
         ALL_KEYS.map((key) => [key, useSetting(key)]),
-    ) as Record<SettingKey, ReturnType<typeof useSetting>>;
+    ) as Record<string, ReturnType<typeof useSetting>>;
 
-    return (keys = ALL_KEYS) =>
-        Object.fromEntries(keys.map((key) => [key, String(stores[key][0]() ?? "")]));
+    return (keys = ALL_KEYS) => {
+        const result: Record<string, string> = {};
+        for (const key of keys) {
+            const store = stores[key];
+            result[key] = store ? String(store[0]() ?? "") : "";
+        }
+        return result;
+    };
 }

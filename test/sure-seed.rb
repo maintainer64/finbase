@@ -40,6 +40,7 @@ unless family.accounts.exists?(institution_domain: domain)
       balance: 0,
       institution_name: domain,
       institution_domain: "Integration Bank",
+      owner_id: user.id,
       accountable_attributes: {}
     },
     opening_balance_date: Date.today - 30

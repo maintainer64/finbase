@@ -1,4 +1,4 @@
-import {createEffect, createSignal, onMount} from 'solid-js';
+import {createEffect, createSignal} from 'solid-js';
 
 
 export function useUniversalStorage<T>(
@@ -9,47 +9,37 @@ export function useUniversalStorage<T>(
         deserialize?: (value: string) => T;
     }
 ): [() => T, (value: T | ((prev: T) => T)) => void, () => boolean, () => string, () => boolean] {
-    const [value, setValue] = createSignal<T>(defaultValue);
-    const [isPersistent, setIsPersistent] = createSignal<boolean>(false);
-    const [error, setError] = createSignal<string>('');
-    const [isInitialStateResolved, setIsInitialStateResolved] = createSignal<boolean>(false);
-
     const serialize = options?.serialize || JSON.stringify;
     const deserialize = options?.deserialize || JSON.parse;
 
-    const useLocalStorage = () => {
-        onMount(() => {
-            try {
-                const stored = localStorage.getItem(key);
-                if (stored !== null) {
-                    const parsed = deserialize(stored);
-                    setValue(parsed);
-                }
-                setIsPersistent(true);
-                setIsInitialStateResolved(true);
-            } catch (err) {
-                setError(err instanceof Error ? err.message : 'Unknown error');
-                setIsInitialStateResolved(true);
-            }
-        });
+    let initial = defaultValue;
+    let persistent = false;
+    let loadError = '';
+    try {
+        const stored = localStorage.getItem(key);
+        if (stored !== null) {
+            initial = deserialize(stored);
+        }
+        persistent = true;
+    } catch (err) {
+        loadError = err instanceof Error ? err.message : 'Unknown error';
+    }
 
-        createEffect(() => {
-            if (isInitialStateResolved()) {
-                try {
-                    const serialized = serialize(value());
-                    localStorage.setItem(key, serialized);
-                    setError('');
-                    setIsPersistent(true);
-                } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Unknown error');
-                    setIsPersistent(false);
-                }
-            }
-        });
-    };
+    const [value, setValue] = createSignal<T>(initial);
+    const [isPersistent, setIsPersistent] = createSignal<boolean>(persistent);
+    const [error, setError] = createSignal<string>(loadError);
+    const [isInitialStateResolved] = createSignal<boolean>(true);
 
-    onMount(() => {
-        useLocalStorage();
+    createEffect(() => {
+        try {
+            const serialized = serialize(value());
+            localStorage.setItem(key, serialized);
+            setError('');
+            setIsPersistent(true);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Unknown error');
+            setIsPersistent(false);
+        }
     });
 
     const updateValue = (newValue: T | ((prev: T) => T)) => {

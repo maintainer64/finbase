@@ -100,12 +100,15 @@ export class SureInternalApi {
         });
     }
 
-    async getTickerByName(ticker: string, dataProviders: string[] = []): Promise<string[]> {
+    async getTickerByName(ticker: string, dataProviders: string[] = [], countryCode?: string): Promise<string[]> {
         const token = await this.fetchAuthenticityToken(`/trades/new`, "");
         const url = new URL(`${this.baseUrl}/securities`);
         url.searchParams.append('for_id', 'model_ticker');
         url.searchParams.append('format', 'turbo');
         url.searchParams.append('q', ticker);
+        if (countryCode) {
+            url.searchParams.append('country_code', countryCode);
+        }
         const response = await this.fetchFn(url.toString(), {
             method: 'GET',
             headers: {'X-Csrf-Token': this.lastCSRF || token},

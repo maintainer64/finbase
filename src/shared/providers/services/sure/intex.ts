@@ -217,7 +217,7 @@ export class SureService implements ProviderSync, ProviderFormatCSV {
                 return {security_id: securityItem.id}
             }
         }
-        const tickerListExternal = await this.internalApi.getTickerByName(trade.ticker, trade.dataProviders);
+        const tickerListExternal = await this.internalApi.getTickerByName(trade.ticker, trade.dataProviders, trade.country_code);
         for (const tickerExternal of tickerListExternal) {
             const securityCollectionResponse = await this.externalApi.v1SecuritiesList({
                 page: 1,
@@ -265,12 +265,19 @@ export class SureService implements ProviderSync, ProviderFormatCSV {
             const accountId = accountIdByDomain.get(trade.external_account_id)!;
             current++;
             onProgress?.({stage: "Отправка сделок в Sure", current, total});
-            const [existTrades, existTransactions] = await Promise.all([
-                this.getExistingTrades({accountId: accountId, date: trade.date}),
-                this.getExistingTransaction({accountId: accountId, date: trade.date}),
-            ]);
-            if (searchTrade(existTrades, trade, accountId)) continue;
-            if (searchTransaction(existTransactions, trade, accountId)) continue;
+
+            // Если у трейда есть external_id — сервер сам сдублирует (initializer).
+            // Без external_id (fallback) — проверяем через существующие трейды.
+            if (!trade.external_id) {
+                const tradeDate = trade.date.slice(0, 10);
+                const [existTrades, existTransactions] = await Promise.all([
+                    this.getExistingTrades({accountId: accountId, date: tradeDate}),
+                    this.getExistingTransaction({accountId: accountId, date: tradeDate}),
+                ]);
+                if (searchTrade(existTrades, trade, accountId)) continue;
+                if (searchTransaction(existTransactions, trade, accountId)) continue;
+            }
+
             // Для buy/sell Sure обязательно требует бумагу (security_id/ticker/
             // manual_ticker). Без тикера запрос гарантированно упадёт с
             // «Security identifier required» — пропускаем и говорим об этом явно.
@@ -279,19 +286,20 @@ export class SureService implements ProviderSync, ProviderFormatCSV {
                 continue;
             }
             const tickerPayload = await this.getExistingTicker(trade);
-            const base = {
+            const base: Record<string, unknown> = {
                 account_id: accountId,
-                date: trade.date,
+                date: trade.date.slice(0, 10),
                 type: trade.type,
                 currency: trade.currency,
                 ...(trade.qty !== undefined ? {qty: trade.qty} : {}),
                 ...(trade.price !== undefined ? {price: trade.price} : {}),
                 ...(trade.amount !== undefined ? {amount: trade.amount} : {}),
+                ...(trade.external_id ? {external_id: trade.external_id, source: trade.source || 'api'} : {}),
                 ...(tickerPayload ?? {}),
             };
             try {
                 await this.externalApi.v1TradesCreate({
-                    trade: {...base},
+                    trade: base as any,
                 });
                 created++
             } catch (e) {

@@ -2,7 +2,7 @@ import {Account, OnProgress, ProviderAny, ProviderParams, Transaction} from "../
 import {getCookieByName, getMaxTransactions} from "@/shared/utils";
 import {swFetch} from "@/shared/sw-fetch";
 import {logSync} from "@/shared/sync-log";
-import {getAccountName, getCurrencyCodeMap, getFullNotice, OpeningBalanceDateDefault, logItems} from "@/shared/providers/utils";
+import {getAccountName, getCurrencyCodeMap, getFullNotice, OpeningBalanceDateDefault, logItems, filterByConfig} from "@/shared/providers/utils";
 
 
 const PREFIX_BANK = "yandex_";
@@ -202,18 +202,10 @@ async function generateHashAccount(yandexLogin: string, id: string) {
 }
 
 export const yandexBankTransactions: ProviderAny = {
-    getName: () => {
-        return "Яндекс-Банк"
-    },
-    getIcon: () => {
-        return "yandex.png"
-    },
-    getUrl: () => {
-        return BASE_URL
-    },
-    baseUrlLogo: () => {
-        return "pay.yandex.ru"
-    },
+    getName: () => 'Яндекс-Банк',
+    getIcon: () => 'yandex.png',
+    getUrl: () => BASE_URL,
+    baseUrlLogo: () => 'pay.yandex.ru',
 
     // Ищет в webpack-бандле хэши всех нужных операций за один проход.
     prepare: async (_params: ProviderParams, onProgress?: OnProgress): Promise<void> => {
@@ -224,7 +216,7 @@ export const yandexBankTransactions: ProviderAny = {
     getTransactions: async (params: ProviderParams): Promise<[Transaction[], any?]> => {
         const [accounts] = await yandexBankTransactions.getAccounts?.(params) || [[], undefined];
         const rows: Transaction[] = [];
-        const maxLimit = getMaxTransactions(params.maxTransactions);
+        const maxLimit = getMaxTransactions(params.config['general-max-transactions']);
         const yandexLogin = await getCookieByName('yandex_login', BASE_URL);
         if (!yandexLogin) return [rows, {}];
         await ensurePrepared();
@@ -266,9 +258,12 @@ export const yandexBankTransactions: ProviderAny = {
                 source: PREFIX_BANK,
             })
         }
-        logItems("Яндекс-Банк", "операций разобрано", rows);
-        return [rows, operations];
+        const filtered = filterByConfig(rows, params.config);
+        logItems("Яндекс-Банк", `операций разобрано (отфильтровано ${filtered.length} из ${rows.length})`, filtered);
+        return [filtered, operations];
     },
+
+    getConfigKeys: () => ['general-max-transactions', 'user-name', 'accounts', 'date-start', 'date-end'],
 
     getAccounts: async (params: ProviderParams): Promise<[Account[], any?]> => {
         const rows: Account[] = [];
@@ -282,7 +277,7 @@ export const yandexBankTransactions: ProviderAny = {
         for (const product of products) {
             if (product.id === "CARD") {
                 rows.push({
-                    name: getAccountName(`Карта ${yandexLogin}`, params.userName, yandexBankTransactions.getName()),
+                    name: getAccountName(`Карта ${yandexLogin}`, params.config['user-name'], 'Яндекс-Банк'),
                     currency: getCurrencyCodeMap(product.value?.currency),
                     opening_balance_date: OpeningBalanceDateDefault.toISOString().split('T')[0],
                     institution_name: yandexBankTransactions.baseUrlLogo(),
@@ -305,7 +300,7 @@ export const yandexBankTransactions: ProviderAny = {
             if (item.expiresAt) parts.push(`До: ${item.expiresAt}`);
             const notes = parts.join(', ');
             rows.push({
-                name: getAccountName(name, params.userName, yandexBankTransactions.getName()),
+                name: getAccountName(name, params.config['user-name'], 'Яндекс-Банк'),
                 currency: getCurrencyCodeMap(item.balance?.currency),
                 opening_balance_date: OpeningBalanceDateDefault.toISOString().split('T')[0], // точной даты открытия в ответе нет
                 institution_name: yandexBankTransactions.getName(),
@@ -316,7 +311,10 @@ export const yandexBankTransactions: ProviderAny = {
                 notes,
             } as Account);
         }
-        logItems("Яндекс-Банк", "счетов разобрано", rows, {homeData, savingAccounts});
-        return [rows, {homeData, savingAccounts}];
+        const accountsFilter = params.config.accounts;
+        const selectedSet = accountsFilter ? new Set(accountsFilter.split(',')) : null;
+        const filtered = selectedSet ? rows.filter(r => selectedSet.has(r.institution_name)) : rows;
+        logItems("Яндекс-Банк", `счетов разобрано (отфильтровано ${filtered.length} из ${rows.length})`, filtered, undefined);
+        return [filtered, {homeData, savingAccounts}];
     }
 }

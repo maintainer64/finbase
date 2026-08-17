@@ -1,5 +1,3 @@
-import type {SettingKey} from "@/shared/settings";
-
 export interface Transaction {
     external_account_id: string; // Account ID (required)
     date: string;  // Transaction date + time
@@ -87,21 +85,14 @@ export interface Trade {
     price?: number;              // цена за штуку (buy/sell)
     amount?: number;             // сумма (dividend/deposit/withdrawal/interest)
     currency: string;
+    country_code?: string;       // ISO 3166-1 alpha-2 код страны (для Security::Resolver)
     external_id: string;         // id операции у брокера (для дедупа на клиенте)
     source: string;
     dataProviders: string[];
 }
 
 export interface ProviderParams {
-    url: string
-    maxTransactions: string
-    userName?: string
-    /**
-     * Значения настроек, которые провайдер объявил в getConfigKeys()
-     * (ключи из схемы SETTINGS). Так общий тип не растёт под каждый источник:
-     * провайдеру, ходящему по токену, страница сама отдаст его токен.
-     */
-    config?: Record<string, string>
+    config: Record<string, string>
 }
 
 // Категория сервиса — по ней раскладываем провайдеров по вкладкам
@@ -120,9 +111,7 @@ export interface ProviderAny {
     // По умолчанию (если не задано) считаем провайдера банком.
     getKind?(): ProviderKind;
 
-    // Ключи настроек (из схемы SETTINGS), нужные провайдеру: их значения
-    // придут в params.config. Провайдерам на куках это не нужно.
-    getConfigKeys?(): SettingKey[];
+    getConfigKeys?(): string[];
 
     prepare?(params: ProviderParams, onProgress?: OnProgress): Promise<void>;
 

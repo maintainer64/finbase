@@ -58,6 +58,7 @@ export function searchTrade(
     return existTrades.find(trade => {
         if (!matchBase(trade, date, type, accountId, currentTrade.currency)) return false;
 
+        // Матчим по qty+price
         if (type === 'buy' || type === 'sell') {
             const tradeQty = parseFlexibleNumber(trade.qty);
             const tradePrice = parseFlexibleNumber(trade.price);
@@ -76,13 +77,13 @@ export function searchTransaction(
 ): SureTransaction | undefined {
     const date = currentTrade.date.slice(0, 10);
     const type = currentTrade.type.toLowerCase();
-    const amount = parseFlexibleNumber(currentTrade.amount);
+    const absAmount = Math.abs(parseFlexibleNumber(currentTrade.amount));
 
     return existTransactions.find(transaction => {
         if (!matchBase(transaction, date, type, accountId, currentTrade.currency)) return false;
 
-        const transactionAmount = parseFlexibleNumber(transaction.amount);
-        if (Math.abs(transactionAmount - amount) <= 0.0001) return true;
+        const transactionAmount = Math.abs(parseFlexibleNumber(transaction.amount));
+        if (Math.abs(transactionAmount - absAmount) <= 0.0001) return true;
         return false;
     });
 }

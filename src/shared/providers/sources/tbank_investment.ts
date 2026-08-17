@@ -1,7 +1,7 @@
 import {Account, ProviderAny, ProviderParams, Trade, TradeType} from "../base";
 import {getMaxTransactions} from "@/shared/utils";
 import {swFetch} from "@/shared/sw-fetch";
-import {getAccountName, getCurrencyCodeMap, OpeningBalanceDateDefault, logItems} from "@/shared/providers/utils";
+import {getAccountName, getCurrencyCodeMap, OpeningBalanceDateDefault, logItems, filterByConfig} from "@/shared/providers/utils";
 import {TINVEST_API_PROD} from "@/shared/settings";
 
 const PREFIX_BANK = "tbank_tinvest_";
@@ -52,8 +52,6 @@ function quotationToNumber(value?: { units?: string | number; nano?: number }): 
     const nano = Number(value.nano ?? 0);
     return units + nano / 1e9;
 }
-
-const dateOnly = (iso?: string): string => (iso ?? "").slice(0, 10);
 
 // Тип операции брокера -> тип сделки Sure. Незнакомые операции пропускаем.
 const TRADE_TYPE_BY_OPERATION: Record<string, TradeType> = {
@@ -159,7 +157,7 @@ interface InvestOperation {
 
 /** Токен обязателен: без него лучше явная ошибка, чем пустая выгрузка. */
 function requireToken(params: ProviderParams): string {
-    const token = params.config?.["tbank-invest-token"];
+        const token = params.config["tbank-invest-token"];
     if (!token) {
         throw new Error(
             "Не задан токен T-Invest OpenAPI. Укажите его в настройках расширения " +
@@ -206,7 +204,7 @@ export const tbankInvestment: ProviderAny = {
     getKind: () => "investment" as const,
 
     // Провайдер ходит по токену OpenAPI, а не по кукам вкладки
-    getConfigKeys: () => ["tbank-invest-token", "tbank-invest-api-url"],
+    getConfigKeys: () => ['tbank-invest-token', 'tbank-invest-api-url', 'general-max-transactions', 'user-name', 'accounts', 'date-start', 'date-end'],
 
     getIcon: () => "tbank.png",
 
@@ -215,9 +213,10 @@ export const tbankInvestment: ProviderAny = {
     getUrl: () => BASE_URL,
 
     getAccounts: async (params: ProviderParams): Promise<[Account[], any?]> => {
+        console.log(params);
         const rows: Account[] = [];
         const token = requireToken(params);
-        const apiUrl = params.config?.["tbank-invest-api-url"] || TINVEST_API_PROD;
+        const apiUrl = params.config["tbank-invest-api-url"] || TINVEST_API_PROD;
 
         const data = await invest<{ accounts?: InvestAccount[] }>(
             apiUrl,
@@ -232,7 +231,7 @@ export const tbankInvestment: ProviderAny = {
             rows.push({
                 name: getAccountName(
                     account.name || "Брокерский счёт",
-                    params.userName,
+                    params.config['user-name'],
                     tbankInvestment.getName(),
                 ),
                 currency: "RUB", // брокерский счёт мультивалютный; базовая валюта — рубль
@@ -247,17 +246,20 @@ export const tbankInvestment: ProviderAny = {
                 notes: [account.type, account.status].filter(Boolean).join(", "),
             } as Account);
         }
-        logItems("Т-Инвестиции", "счетов получено", accounts, data);
-        return [rows, accounts];
+        const accountsFilter = params.config.accounts;
+        const selectedSet = accountsFilter ? new Set(accountsFilter.split(',')) : null;
+        const filteredRows = selectedSet ? rows.filter(r => selectedSet.has(r.institution_name)) : rows;
+        logItems("Т-Инвестиции", `счетов получено (отфильтровано ${filteredRows.length} из ${rows.length})`, filteredRows, undefined);
+        return [filteredRows, accounts];
     },
 
     getTrades: async (params: ProviderParams): Promise<[Trade[], any?]> => {
         const rows: Trade[] = [];
         const token = requireToken(params);
-        const apiUrl = params.config?.["tbank-invest-api-url"] || TINVEST_API_PROD;
+        const apiUrl = params.config["tbank-invest-api-url"] || TINVEST_API_PROD;
 
         const [accounts] = await tbankInvestment.getAccounts?.(params) || [[], undefined];
-        const maxLimit = getMaxTransactions(params.maxTransactions);
+        const maxLimit = getMaxTransactions(params.config['general-max-transactions']);
         const rawOperations: InvestOperation[] = [];
 
         for (const account of accounts) {
@@ -295,14 +297,20 @@ export const tbankInvestment: ProviderAny = {
                     const currency = getCurrencyCodeMap(
                         (operation.payment?.currency ?? operation.price?.currency ?? "rub").toUpperCase(),
                     );
+                    const genExtId = () => {
+                        const raw = operation.date ?? "";
+                        const ts = raw.replace(/[^0-9T:-]/g, "").slice(0, 19);
+                        return `${PREFIX_BANK}gen_${ts}_${opType}_${payment}_${currency}`;
+                    };
                     const trade: Trade = {
                         external_account_id: account.institution_name,
-                        date: dateOnly(operation.date),
+                        date: operation.date ?? '',
                         type: tradeType,
                         ticker,
                         name: operation?.name || operation?.description || opType,
                         currency,
-                        external_id: operation.id ?? "",
+                        country_code: "RU",
+                        external_id: operation.id || genExtId(),
                         source: PREFIX_BANK,
                         dataProviders: ["moex_public", "tinkoff_invest"]
                     };
@@ -322,7 +330,8 @@ export const tbankInvestment: ProviderAny = {
         }
 
         logItems("Т-Инвестиции", "операций получено", rawOperations);
-        logItems("Т-Инвестиции", "сделок разобрано", rows);
-        return [rows.slice(0, maxLimit), rawOperations];
+        const filtered = filterByConfig(rows, params.config);
+        logItems("Т-Инвестиции", `сделок разобрано (отфильтровано ${filtered.length} из ${rows.length})`, filtered);
+        return [filtered.slice(0, maxLimit), rawOperations];
     },
 };

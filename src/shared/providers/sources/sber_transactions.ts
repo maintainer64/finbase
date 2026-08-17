@@ -1,20 +1,15 @@
 import {Account, ProviderAny, ProviderParams, Transaction} from "../base";
 import {swFetch} from "@/shared/sw-fetch";
 import {getMaxTransactions} from "@/shared/utils";
-import {getAccountName, getCurrencyCodeMap, getFullNotice, OpeningBalanceDateDefault, logItems} from "@/shared/providers/utils";
+import {getAccountName, getCurrencyCodeMap, getFullNotice, OpeningBalanceDateDefault, logItems, filterByConfig} from "@/shared/providers/utils";
 
-const SETTINGS = {
-    prefix: "sber_",
-    name: "Сбер",
-    icon: "sber.png",
-    url: "https://online.sberbank.ru/app/main",
-    baseUrlLogo: "sberbank.ru",
-    baseUrl: "https://web-node4.online.sberbank.ru",
-};
+const PREFIX = "sber_";
+const URL = "https://online.sberbank.ru/app/main";
+const BASE_URL_LOGO = "sberbank.ru";
+const BASE_URL = "https://web-node4.online.sberbank.ru";
 
 let cachedBaseUrl: string | null = null;
 
-// Динамическое определение базового URL Сбербанка
 async function getBaseUrl(): Promise<string> {
     if (cachedBaseUrl) return cachedBaseUrl;
 
@@ -49,7 +44,7 @@ async function getBaseUrl(): Promise<string> {
     } catch { /* fallback to default */
     }
 
-    cachedBaseUrl = SETTINGS.baseUrl;
+    cachedBaseUrl = BASE_URL;
     return cachedBaseUrl;
 }
 
@@ -75,7 +70,6 @@ async function getAccountsMainScreen() {
     return await response.json();
 }
 
-// Получение данных в списке счетов
 async function getSberTransactions(limit: number = 100, offset: number = 0) {
     const baseUrl = await getBaseUrl();
     const requestOptions = {
@@ -109,8 +103,6 @@ interface MapAccount {
     externalId: string;
 }
 
-
-// Маппинг списка счетов
 async function fetchMapResourceToAccountId(): Promise<MapAccount[]> {
     const mapAccounts: MapAccount[] = [];
     const resp = await getAccountsMainScreen();
@@ -123,7 +115,7 @@ async function fetchMapResourceToAccountId(): Promise<MapAccount[]> {
             number: acct?.number,
             cardHolder: undefined,
             type: 'debit',
-            externalId: `${SETTINGS.prefix}ct-account:${acct.id}`
+            externalId: `${PREFIX}ct-account:${acct.id}`
         });
     }
 
@@ -133,7 +125,7 @@ async function fetchMapResourceToAccountId(): Promise<MapAccount[]> {
             number: dep?.number,
             cardHolder: undefined,
             type: 'debit',
-            externalId: `${SETTINGS.prefix}account:${dep.id}`,
+            externalId: `${PREFIX}account:${dep.id}`,
         });
     }
 
@@ -154,22 +146,16 @@ async function fetchMapResourceToAccountId(): Promise<MapAccount[]> {
 
 
 export const sberTransactions: ProviderAny = {
-    getName: () => {
-        return SETTINGS.name
-    },
-    getIcon: () => {
-        return SETTINGS.icon
-    },
-    getUrl: () => {
-        return SETTINGS.url
-    },
-    baseUrlLogo: () => {
-        return SETTINGS.baseUrlLogo
-    },
+    getName: () => 'Сбер',
+    getIcon: () => 'sber.png',
+    getUrl: () => URL,
+    baseUrlLogo: () => BASE_URL_LOGO,
+
+    getConfigKeys: () => ['general-max-transactions', 'user-name', 'accounts', 'date-start', 'date-end'],
 
     getTransactions: async (params: ProviderParams): Promise<[Transaction[], any?]> => {
         const rows: Transaction[] = [];
-        const maxLimit = getMaxTransactions(params.maxTransactions);
+        const maxLimit = getMaxTransactions(params.config['general-max-transactions']);
         let operations = [];
          
         while (true) {
@@ -201,7 +187,7 @@ export const sberTransactions: ProviderAny = {
                 ),
                 currency: getCurrencyCodeMap(operation?.operationAmount?.currencyCode),
                 external_id: operation?.externalId,
-                source: SETTINGS.prefix,
+                source: PREFIX,
                 external_account_id: '',
                 nature: parseFloat(operation?.operationAmount?.amount || "0.00") > 0 ? 'income' : 'expense',
             } as Transaction
@@ -223,8 +209,9 @@ export const sberTransactions: ProviderAny = {
                 })
             }
         }
-        logItems("Сбер", "операций разобрано", rows, operations);
-        return [rows, operations];
+        const filtered = filterByConfig(rows, params.config);
+        logItems("Сбер", `операций разобрано (отфильтровано ${filtered.length} из ${rows.length})`, filtered, undefined);
+        return [filtered, operations];
     },
 
     getAccounts: async (params: ProviderParams): Promise<[Account[], any?]> => {
@@ -233,39 +220,40 @@ export const sberTransactions: ProviderAny = {
         const productData = resp?.body?.sections?.technicalSection?.sectionProductData;
         if (!productData) return [rows, {}];
 
-        // 1. Транзакционные счета (текущие, не кредитные)
         for (const acct of productData?.ctaccounts?.data || []) {
             rows.push({
-                name: getAccountName(acct.name || 'Платёжный счёт', params.userName, sberTransactions.getName()),
+                name: getAccountName(acct.name || 'Платёжный счёт', params.config['user-name'], 'Сбер'),
                 currency: getCurrencyCodeMap(acct.balance?.currency?.code),
                 opening_balance_date: OpeningBalanceDateDefault.toISOString().split('T')[0],
-                institution_name: `${SETTINGS.prefix}ct-account:${acct.id}`,
-                institution_domain: SETTINGS.baseUrlLogo,
+                institution_name: `${PREFIX}ct-account:${acct.id}`,
+                institution_domain: BASE_URL_LOGO,
                 subtype: 'checking',
                 accountable_type: 'Depository',
                 notes: acct.number ? `Счёт: ${acct.number}` : undefined,
             } as Account);
         }
 
-        // 2. Вклады и накопительные счета
         for (const dep of productData?.accounts?.data || []) {
             const notesParts = [];
             if (dep.rate) notesParts.push(`Ставка: ${dep.rate}%`);
             if (dep.number) notesParts.push(`Счёт: ${dep.number}`);
 
             rows.push({
-                name: getAccountName(dep.name || 'Вклад', params.userName, sberTransactions.getName()),
+                name: getAccountName(dep.name || 'Вклад', params.config['user-name'], 'Сбер'),
                 currency: getCurrencyCodeMap(dep.balance?.currency?.code),
                 opening_balance_date: (dep.openDate ? dep.openDate.split('.').reverse().join('-') : OpeningBalanceDateDefault.toLocaleDateString('en-CA')),
-                institution_name: `${SETTINGS.prefix}account:${dep.id}`,
-                institution_domain: SETTINGS.baseUrlLogo,
-                subtype: 'savings', // при наличии closeDate можно менять на 'cd'
+                institution_name: `${PREFIX}account:${dep.id}`,
+                institution_domain: BASE_URL_LOGO,
+                subtype: 'savings',
                 accountable_type: 'Depository',
                 expiration_date: dep.closeDate || undefined,
                 notes: notesParts.join(';') || undefined,
             } as Account);
         }
-        logItems("Сбер", "счетов разобрано", rows, resp);
-        return [rows, resp];
+        const accountsFilter = params.config.accounts;
+        const selectedSet = accountsFilter ? new Set(accountsFilter.split(',')) : null;
+        const filtered = selectedSet ? rows.filter(r => selectedSet.has(r.institution_name)) : rows;
+        logItems("Сбер", `счетов разобрано (отфильтровано ${filtered.length} из ${rows.length})`, filtered, undefined);
+        return [filtered, resp];
     },
 }

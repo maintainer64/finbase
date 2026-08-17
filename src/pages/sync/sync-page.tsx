@@ -48,12 +48,7 @@ export const SyncPage: Component = () => {
             return;
         }
 
-        const params: ProviderParams = {
-            url: req.url,
-            maxTransactions: req.maxTransactions,
-            userName: req.userName,
-            config: req.config,
-        };
+        const params: ProviderParams = {config: req.config};
 
         try {
             // Подготовка (напр. у Яндекса — поиск операций в webpack-бандле).
@@ -66,6 +61,7 @@ export const SyncPage: Component = () => {
             if (provider.getAccounts && service.createAccountsIfNotExists) {
                 setProgress({stage: "Загрузка счетов из банка…"});
                 const [accounts] = await provider.getAccounts?.(params) || [[], undefined];
+                accounts.sort((a, b) => new Date(a.opening_balance_date).getTime() - new Date(b.opening_balance_date).getTime());
                 logSync(`Счетов получено: ${accounts.length}`);
                 await service.createAccountsIfNotExists(accounts, setProgress);
             }
@@ -73,6 +69,7 @@ export const SyncPage: Component = () => {
             if (provider.getTransactions && service.createTransactionsIfNotExists) {
                 setProgress({stage: "Загрузка операций из банка…"});
                 const [transactions] = await provider.getTransactions(params) || [[], undefined];
+                transactions.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
                 logSync(`Операций получено: ${transactions.length}`);
                 await service.createTransactionsIfNotExists(transactions, setProgress);
             }
@@ -80,6 +77,7 @@ export const SyncPage: Component = () => {
             if (provider.getTrades && service.createTradesIfNotExists) {
                 setProgress({stage: "Загрузка сделок…"});
                 const [trades] = await provider.getTrades(params) || [[], undefined];
+                trades.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
                 logSync(`Сделок получено: ${trades.length}`);
                 await service.createTradesIfNotExists(trades, setProgress);
             }

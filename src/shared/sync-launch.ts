@@ -3,13 +3,9 @@
 // Popup кладёт запрос в localStorage и открывает окно #/sync, которое его читает.
 
 export interface SyncRequest {
-    providerName: string;   // provider.getName()
-    serviceName: string;    // service.getName() (Sure / Firefly III)
-    url: string;            // адрес вкладки банка
-    maxTransactions: string;
-    userName?: string;
-    // Значения настроек, нужных провайдеру (см. ProviderAny.getConfigKeys)
-    config?: Record<string, string>;
+    providerName: string;
+    serviceName: string;
+    config: Record<string, string>;
 }
 
 const SYNC_REQUEST_KEY = 'pending-sync-request';

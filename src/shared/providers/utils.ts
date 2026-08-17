@@ -32,3 +32,28 @@ export function logItems(source: string, what: string, items: unknown, raw?: any
     }
     logSync(`${source}: ${what} — ${items.length}`);
 }
+
+export function filterByConfig<T extends { date?: string; external_account_id?: string }>(
+    items: T[],
+    config: Record<string, string>,
+): T[] {
+    const accounts = config.accounts;
+    if (accounts) {
+        const selected = new Set(accounts.split(','));
+        items = items.filter(t => t.external_account_id && selected.has(t.external_account_id));
+    }
+
+    const dateStart = config['date-start'];
+    const dateEnd = config['date-end'];
+    if (dateStart || dateEnd) {
+        const start = dateStart ? new Date(dateStart).getTime() : -Infinity;
+        const end = dateEnd ? new Date(dateEnd).setHours(23, 59, 59, 999) : Infinity;
+        items = items.filter(t => {
+            if (!t.date) return false;
+            const ts = new Date(t.date).getTime();
+            return !isNaN(ts) && ts >= start && ts <= end;
+        });
+    }
+
+    return items;
+}
