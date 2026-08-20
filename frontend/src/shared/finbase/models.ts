@@ -63,6 +63,11 @@ export interface TransactionRecord extends PocketBaseRecord {
     external_id: string;
 }
 
+/** Поля новой записи; системные id/created/updated всегда назначает PocketBase. */
+export type NewRecord<T extends PocketBaseRecord> = Omit<T, keyof PocketBaseRecord>;
+export type NewAccountRecord = NewRecord<AccountRecord>;
+export type NewTransactionRecord = NewRecord<TransactionRecord>;
+
 export interface TransferRecord extends PocketBaseRecord {
     inflow_transaction: string;
     outflow_transaction: string;

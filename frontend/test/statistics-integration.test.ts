@@ -28,12 +28,17 @@ async function pbRequest(path: string, init?: RequestInit & {token?: string}): P
 
 const account = (domain: string): Account => ({
     name: "Тест-счёт",
+    type: "checking",
+    balance: 0,
+    owner: "",
     currency: "RUB",
-    institution_name: domain,
-    institution_domain: domain,
+    external_id: domain,
     provider_code: "test",
-    subtype: "checking",
     accountable_type: "Depository",
+    accountable_id: domain,
+    notes: "",
+    disabled_at: "",
+    excluded_report_at: "",
 });
 
 describe("Финансовая статистика (view-коллекции)", () => {
@@ -73,18 +78,18 @@ describe("Финансовая статистика (view-коллекции)", 
         expect(acc).toBeTruthy();
 
         const tx: Transaction = {
-            external_account_id: domain,
+            account: domain,
+            category: "",
+            tags: [],
             date: "2026-07-01T12:00:00.000Z",
             amount: 500,
-            name: "Пополнение",
             currency: "RUB",
-            nature: "income",
+            note: "Пополнение",
             external_id: `stats-in-${runId}`,
-            source: "integration-stats",
         };
         await service.createTransactionsIfNotExists([
             tx,
-            {...tx, external_id: `stats-out-${runId}`, amount: 200, nature: "expense", date: "2026-07-03T12:00:00.000Z"},
+            {...tx, external_id: `stats-out-${runId}`, amount: -200, date: "2026-07-03T12:00:00.000Z"},
         ]);
 
         const flows = await service.getDailyFlows([acc!.id]);
@@ -118,14 +123,14 @@ describe("Финансовая статистика (view-коллекции)", 
         expect(acc).toBeTruthy();
 
         const tx: Transaction = {
-            external_account_id: domain,
+            account: domain,
+            category: "",
+            tags: [],
             date: "2026-07-05T12:00:00.000Z",
-            amount: 100,
-            name: "Покупка",
+            amount: -100,
             currency: "RUB",
-            nature: "expense",
+            note: "Покупка",
             external_id: `stats-cat-tx-${runId}`,
-            source: "integration-stats",
         };
         await service.createTransactionsIfNotExists([tx]);
 

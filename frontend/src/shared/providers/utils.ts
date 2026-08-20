@@ -31,14 +31,14 @@ export function logItems(source: string, what: string, items: unknown, raw?: any
     logSync(`${source}: ${what} — ${items.length}`);
 }
 
-export function filterByConfig<T extends { date?: string; external_account_id?: string }>(
+export function filterByConfig<T extends { date?: string; account?: string }>(
     items: T[],
     config: Record<string, string>,
 ): T[] {
     const accounts = config.accounts;
     if (accounts) {
         const selected = new Set(accounts.split(','));
-        items = items.filter(t => t.external_account_id && selected.has(t.external_account_id));
+        items = items.filter(t => t.account && selected.has(t.account));
     }
 
     const dateStart = config['date-start'];

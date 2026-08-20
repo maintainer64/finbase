@@ -1,6 +1,6 @@
 import {Account, OnProgress, ProviderSync, Transaction} from "@/shared/providers/base";
 import {logSync} from "@/shared/sync-log";
-import {getFinbaseAuthRecordId, requireFinbaseToken} from "@/shared/finbase/token";
+import {requireFinbaseToken} from "@/shared/finbase/token";
 import {
     AccountRecord,
     CategoryRecord,
@@ -52,24 +52,14 @@ export function normalizeDate(value: string): string {
 
 const filterValue = (value: string): string => JSON.stringify(value);
 
-// Маппинг subtype/accountable_type провайдера -> select type коллекции accounts
-function toAccountType(account: Account): AccountRecord["type"] {
-    if (account.accountable_type === "CreditCard") return "credit";
-    if (account.subtype === "savings" || account.subtype === "hsa" || account.subtype === "cd" || account.subtype === "money_market") {
-        return "savings";
-    }
-    return "checking";
-}
-
 export class FinbaseService implements ProviderSync {
     private readonly baseUrl: string;
     private readonly token: string;
-    private readonly ownerId: string;
+    private ownerId = "";
 
     constructor(baseUrl: string, token: string) {
         this.baseUrl = baseUrl.replace(/\/+$/, "");
         this.token = token;
-        this.ownerId = getFinbaseAuthRecordId(token);
     }
 
     getName(): string {
@@ -91,12 +81,18 @@ export class FinbaseService implements ProviderSync {
             const details = await response.text().catch(() => "");
             let message = details;
             try {
-                const payload = JSON.parse(details) as {message?: string};
-                message = payload.message ?? details;
+                const payload = JSON.parse(details) as {
+                    message?: string;
+                    data?: Record<string, {message?: string; code?: string}>;
+                };
+                const fields = Object.entries(payload.data ?? {})
+                    .map(([field, error]) => `${field}: ${error.message || error.code || "некорректное значение"}`)
+                    .join("; ");
+                message = [payload.message, fields].filter(Boolean).join(" — ") || details;
             } catch {
                 // PocketBase/nginx иногда возвращает обычный текст.
             }
-            throw Error(`PocketBase: ${message || `HTTP ${response.status}`}`);
+            throw Error(`PocketBase HTTP ${response.status}: ${message || response.statusText}`);
         }
         if (response.status === 204) return undefined as T;
         return (await response.json()) as T;
@@ -112,33 +108,43 @@ export class FinbaseService implements ProviderSync {
         return items[0];
     }
 
+    /** Получаем владельца из действующей сессии, не полагаясь только на разбор JWT в браузере. */
+    private async resolveOwnerId(): Promise<string> {
+        if (this.ownerId) return this.ownerId;
+        const auth = await this.request<{record: UserRecord}>("POST", "collections/users/auth-refresh");
+        this.ownerId = auth.record?.id || "";
+        if (!this.ownerId) {
+            throw new Error("Finbase: PocketBase не вернул id пользователя. Выйдите и войдите через OIDC заново.");
+        }
+        return this.ownerId;
+    }
+
     async createAccountsIfNotExists(accounts: Account[], onProgress?: OnProgress): Promise<void> {
         onProgress?.({stage: "Проверка счетов в Finbase…"});
+        const defaultOwnerId = accounts.some(account => !account.owner)
+            ? await this.resolveOwnerId()
+            : "";
         const total = accounts.length;
         let current = 0;
         for (const account of accounts) {
             current++;
             onProgress?.({stage: "Создание счетов в Finbase", current, total});
-            // Ключ связки — префиксованный id провайдера (sber_<id>, tbank_<id>).
-            // Провайдеры кладут его в institution_name, и это же значение они пишут
-            // в external_account_id операций, поэтому external_id счёта должен совпадать
-            // с ним один в один (модель Finbase — только PB-поля, без доменов).
-            const externalId = account.institution_name
-                || `${account.provider_code || "unknown"}_${account.accountable_id || account.institution_domain || ""}`;
-            const existing = await this.find("accounts", `external_id = ${filterValue(externalId)}`);
+            const existing = await this.find("accounts", `external_id = ${filterValue(account.external_id)}`);
             if (existing) continue;
-            await this.request("POST", "collections/accounts/records", {
+            const payload: Partial<AccountRecord> = {
                 name: account.name,
-                type: toAccountType(account),
-                balance: 0,
+                type: account.type,
                 currency: account.currency || "RUB",
-                owner: this.ownerId,
-                external_id: externalId,
+                owner: account.owner || defaultOwnerId,
+                external_id: account.external_id,
                 provider_code: account.provider_code || "",
-                accountable_type: account.accountable_type || account.subtype || "",
+                accountable_type: account.accountable_type || "",
                 accountable_id: account.accountable_id || "",
                 notes: account.notes || "",
-            });
+            };
+            if (account.disabled_at) payload.disabled_at = account.disabled_at;
+            if (account.excluded_report_at) payload.excluded_report_at = account.excluded_report_at;
+            await this.request("POST", "collections/accounts/records", payload);
         }
     }
 
@@ -151,20 +157,22 @@ export class FinbaseService implements ProviderSync {
         for (const transaction of transactions) {
             current++;
             onProgress?.({stage: "Отправка операций в Finbase", current, total});
-            const accountId = accountByExternalId.get(transaction.external_account_id)
-                ?? [...accountByExternalId.entries()].find(([extId]) => extId && transaction.external_account_id.startsWith(extId))?.[1];
+            const accountId = accountByExternalId.get(transaction.account)
+                ?? [...accountByExternalId.entries()].find(([extId]) => extId && transaction.account.startsWith(extId))?.[1];
             if (!accountId) {
-                logSync(`Пропуск операции: счёт «${transaction.external_account_id}» не найден`, "warn");
+                logSync(`Пропуск операции: счёт «${transaction.account}» не найден`, "warn");
                 continue;
             }
             const dupFilter = `account = ${filterValue(accountId)} && external_id = ${filterValue(transaction.external_id)}`;
             if (await this.find("transactions", dupFilter)) continue;
             await this.request("POST", "collections/transactions/records", {
                 account: accountId,
+                category: transaction.category,
+                tags: transaction.tags,
                 date: normalizeDate(transaction.date),
-                amount: transaction.nature === "income" || transaction.nature === "inflow" ? transaction.amount : -transaction.amount,
+                amount: transaction.amount,
                 currency: transaction.currency,
-                note: [transaction.name, transaction.notes].filter(Boolean).join(" · ") || transaction.description || "",
+                note: transaction.note,
                 external_id: transaction.external_id || "",
             });
         }

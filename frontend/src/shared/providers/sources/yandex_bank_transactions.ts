@@ -240,24 +240,24 @@ export const yandexBankTransactions: ProviderAny = {
             if (operation?.statusCode !== "CLEAR") continue;
             const plain = operation?.title?.plain;
             const compound = operation?.title?.compound?.firstPart && operation?.title?.compound?.secondPart ? `${operation?.title?.compound?.firstPart}->${operation?.title?.compound?.secondPart}` : '';
-            const account = accounts.find((account) => operation?.id?.includes(account.institution_domain?.replace(PREFIX_BANK, '')))
+            const account = accounts.find((account) => operation?.id?.includes(account.external_id.replace(PREFIX_BANK, '')))
+            const absoluteAmount = Math.abs(parseFloat(operation?.amount?.money?.amount || "0.00"));
             rows.push({
-                external_account_id: account?.institution_domain || `${PREFIX_BANK}${await generateHashAccount(yandexLogin, "CARD")}`,
+                account: account?.external_id || `${PREFIX_BANK}${await generateHashAccount(yandexLogin, "CARD")}`,
+                category: "",
+                tags: [],
                 date: (new Date(operation?.date)).toISOString(),
-                name: compound || plain || operation?.description || "",
-                description: operation?.comment || operation?.description || compound || plain || operation?.rightSubTitle,
-                notes: getFullNotice(
+                amount: operation?.direction === "CREDIT" ? absoluteAmount : -absoluteAmount,
+                currency: getCurrencyCodeMap(operation?.accountAmount?.currency?.name),
+                note: getFullNotice(
+                    compound || plain || operation?.description || "",
                     operation?.comment,
                     operation?.description,
                     compound,
                     plain,
                     operation?.rightSubTitle,
                 ),
-                currency: getCurrencyCodeMap(operation?.accountAmount?.currency?.name),
-                nature: operation?.direction === "CREDIT" ? "income" : "expense",
-                amount: parseFloat(operation?.amount?.money?.amount || "0.00"),
                 external_id: operation?.id,
-                source: PREFIX_BANK,
             })
         }
         const filtered = filterByConfig(rows, params.config);
@@ -280,15 +280,18 @@ export const yandexBankTransactions: ProviderAny = {
             if (product.id === "CARD") {
                 rows.push({
                     name: getAccountName(`Карта ${yandexLogin}`, params.config['user-name'], 'Яндекс-Банк'),
+                    type: "checking",
+                    balance: 0,
+                    owner: "",
                     currency: getCurrencyCodeMap(product.value?.currency),
-                    institution_name: yandexBankTransactions.baseUrlLogo(),
-                    institution_domain: `${PREFIX_BANK}${await generateHashAccount(yandexLogin, "CARD")}`,
+                    external_id: `${PREFIX_BANK}${await generateHashAccount(yandexLogin, "CARD")}`,
                     provider_code: 'yandex',
                     accountable_id: `CARD:${yandexLogin}`,
-                    subtype: "checking",
                     accountable_type: "Depository",
                     notes: `Баланс: ${product.value?.amount} ${product.value?.currency}`,
-                } as Account);
+                    disabled_at: "",
+                    excluded_report_at: "",
+                });
             }
         }
         const savingAccountHash = operationHash("SavingsAccountsList");
@@ -304,20 +307,22 @@ export const yandexBankTransactions: ProviderAny = {
             const notes = parts.join(', ');
             rows.push({
                 name: getAccountName(name, params.config['user-name'], 'Яндекс-Банк'),
+                type: "savings",
+                balance: 0,
+                owner: "",
                 currency: getCurrencyCodeMap(item.balance?.currency),
-                institution_name: yandexBankTransactions.getName(),
-                institution_domain: `${PREFIX_BANK}${item.id}`,
+                external_id: `${PREFIX_BANK}${item.id}`,
                 provider_code: 'yandex',
                 accountable_id: item.id || '',
-                subtype: "savings",
                 accountable_type: "Depository",
-                expiration_date: item.expiresAt || undefined,
                 notes,
-            } as Account);
+                disabled_at: "",
+                excluded_report_at: "",
+            });
         }
         const accountsFilter = params.config.accounts;
         const selectedSet = accountsFilter ? new Set(accountsFilter.split(',')) : null;
-        const filtered = selectedSet ? rows.filter(r => selectedSet.has(r.institution_name)) : rows;
+        const filtered = selectedSet ? rows.filter(r => selectedSet.has(r.external_id)) : rows;
         logItems("Яндекс-Банк", `счетов разобрано (отфильтровано ${filtered.length} из ${rows.length})`, filtered, undefined);
         return [filtered, {homeData, savingAccounts}];
     }

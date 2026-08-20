@@ -22,16 +22,3 @@ export const requireFinbaseToken = (value: string): string => {
     if (error) throw new Error(error);
     return normalizeFinbaseToken(value);
 };
-
-/** PocketBase кладёт id auth-записи в JWT; используем его как владельца новых счетов. */
-export const getFinbaseAuthRecordId = (value: string): string => {
-    try {
-        const payload = normalizeFinbaseToken(value).split(".")[1];
-        if (!payload) return "";
-        const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-        const decoded = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))) as {id?: unknown};
-        return typeof decoded.id === "string" ? decoded.id : "";
-    } catch {
-        return "";
-    }
-};

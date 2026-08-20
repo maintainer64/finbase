@@ -1,7 +1,6 @@
 import {describe, expect, it} from "vitest";
 import {
     getFinbaseTokenError,
-    getFinbaseAuthRecordId,
     normalizeFinbaseToken,
     requireFinbaseToken,
 } from "@/shared/finbase/token";
@@ -23,10 +22,5 @@ describe("токен Finbase", () => {
 
     it("объясняет отсутствие сеанса", () => {
         expect(() => requireFinbaseToken("   ")).toThrow("нет активного сеанса");
-    });
-
-    it("извлекает владельца счёта из PocketBase JWT", () => {
-        expect(getFinbaseAuthRecordId("aaa.eyJpZCI6InVzZXIxMjMifQ.ccc")).toBe("user123");
-        expect(getFinbaseAuthRecordId("not-a-jwt")).toBe("");
     });
 });

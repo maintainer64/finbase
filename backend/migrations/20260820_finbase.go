@@ -324,7 +324,7 @@ func init() {
 			&core.TextField{Name: "name", Required: true, Max: 200},
 			&core.SelectField{Name: "type", Required: true, MaxSelect: 1, Values: []string{"checking", "savings", "cash", "credit"}},
 			&core.NumberField{Name: "balance"},
-			&core.RelationField{Name: "owner", MaxSelect: 1, CollectionId: users.Id},
+			&core.RelationField{Name: "owner", Required: true, MaxSelect: 1, CollectionId: users.Id},
 			&core.TextField{Name: "currency", Required: true, Max: 3},
 			&core.TextField{Name: "external_id", Max: 200},
 			&core.TextField{Name: "provider_code", Max: 50},

@@ -1,10 +1,10 @@
 import {
     Account,
-    AccountTypeWithSubtype,
     ProviderAny,
     ProviderParams,
     Transaction
 } from "../base";
+import type {AccountType} from "@/shared/finbase/models";
 import {getCookieByName, getMaxTransactions} from "@/shared/utils";
 import {swFetch} from "@/shared/sw-fetch";
 import {getAccountName, getCurrencyCodeMap, getFullNotice, logItems} from "@/shared/providers/utils";
@@ -15,37 +15,43 @@ const URL = "https://www.tbank.ru/mybank/operations";
 const BASE_URL = "https://www.tbank.ru/api/common/v1";
 const BASE_URL_LOGO = "tbank.ru";
 
-const ACCOUNT_TYPES = new Map<string, AccountTypeWithSubtype>([
+interface TBankAccountType {
+    type: AccountType;
+    accountable_type: string;
+    isMine: boolean;
+}
+
+const ACCOUNT_TYPES = new Map<string, TBankAccountType>([
     ['Current', {
         accountable_type: 'Depository',
-        subtype: 'checking',
+        type: 'checking',
         isMine: true,
     }],
     ['SharedCurrent', {
         accountable_type: 'Depository',
-        subtype: 'checking',
+        type: 'checking',
         isMine: false,
     }],
     ['SharedCredit', {
         accountable_type: 'CreditCard',
-        subtype: '',
+        type: 'credit',
         isMine: false,
     }],
     ['Credit', {
         accountable_type: 'CreditCard',
-        subtype: '',
+        type: 'credit',
         isMine: true,
     }],
     ['Saving', {
         accountable_type: 'Depository',
-        subtype: 'savings',
+        type: 'savings',
         isMine: true,
     }],
 ])
 
-const DEFAULT_ACCOUNT_TYPE: AccountTypeWithSubtype = {
+const DEFAULT_ACCOUNT_TYPE: TBankAccountType = {
     accountable_type: 'Depository',
-    subtype: 'checking',
+    type: 'checking',
     isMine: true,
 };
 
@@ -125,13 +131,17 @@ export const tBankTransactions: ProviderAny = {
         const payload = (resp?.payload || []).slice(0, maxLimit)
         payload?.map((operation: any) => {
             if (operation?.status !== "OK") return;
+            const title = operation?.description || operation?.brand?.name || operation?.spendingCategory?.name || "";
+            const absoluteAmount = Math.abs(Number(operation?.accountAmount?.value || 0));
             rows.push({
-                external_account_id: `${PREFIX}${operation?.account || operation?.payment?.bankAccountId}`,
+                account: `${PREFIX}${operation?.account || operation?.payment?.bankAccountId}`,
+                category: "",
+                tags: [],
                 date: (new Date(operation?.operationTime?.milliseconds)).toISOString(),
-                name: operation?.description || operation?.brand?.name || operation?.spendingCategory?.name,
-                description: operation?.payment?.fieldsValues?.message || operation?.spendingCategory?.name || operation?.subcategory || operation?.cardNumber || operation?.card,
-                notes: getFullNotice(
-                    operation?.description,
+                amount: operation?.type === "Credit" ? absoluteAmount : -absoluteAmount,
+                currency: getCurrencyCodeMap(operation?.accountAmount?.currency?.name),
+                note: getFullNotice(
+                    title,
                     operation?.brand?.name,
                     operation?.spendingCategory?.name,
                     operation?.payment?.fieldsValues?.message,
@@ -140,11 +150,7 @@ export const tBankTransactions: ProviderAny = {
                     operation?.cardNumber,
                     operation?.card
                 ),
-                currency: getCurrencyCodeMap(operation?.accountAmount?.currency?.name),
-                nature: operation?.type === "Credit" ? "income" : "expense",
-                amount: operation?.accountAmount?.value || 0,
                 external_id: operation?.id || operation?.operationId?.value,
-                source: PREFIX,
             })
         })
         return [rows, resp];
@@ -181,25 +187,31 @@ export const tBankTransactions: ProviderAny = {
                 return;
             }
             const accountType = ACCOUNT_TYPES.get(account.accountType) ?? DEFAULT_ACCOUNT_TYPE;
+            const notes = getFullNotice(
+                account?.dueDate?.milliseconds
+                    ? `Действует до: ${(new Date(account.dueDate.milliseconds)).toISOString().split('T')[0]}`
+                    : "",
+                account?.creditLimit?.value ? `Кредитный лимит: ${account.creditLimit.value}` : "",
+                account?.currentMinimalPayment?.value ? `Минимальный платёж: ${account.currentMinimalPayment.value}` : "",
+            );
             rows.push({
                 name: getAccountName(account?.name || 'Счёт', params.config['user-name'], 'Т-Банк'),
+                type: accountType.type,
+                balance: 0,
+                owner: "",
                 currency: account?.currency?.name || '',
-                institution_domain: BASE_URL_LOGO,
-                institution_name: `${PREFIX}${account?.id}`,
+                external_id: `${PREFIX}${account?.id}`,
                 provider_code: 'tbank',
                 accountable_id: account?.id || '',
-                subtype: accountType.subtype,
-                expiration_date: account?.dueDate?.milliseconds ? (new Date(account?.dueDate?.milliseconds)).toISOString().split('T')[0] : undefined,
-                available_credit: account?.creditLimit?.value,
-                minimum_payment: account?.currentMinimalPayment?.value,
-                apr: account?.currentMinimalPayment?.value,
                 accountable_type: accountType.accountable_type,
-                notes: "",
+                notes,
+                disabled_at: "",
+                excluded_report_at: "",
             })
         });
         const accountsFilter = params.config.accounts;
         const selectedAccounts = accountsFilter ? new Set(accountsFilter.split(',')) : null;
-        const filtered = selectedAccounts ? rows.filter(r => selectedAccounts.has(r.institution_name)) : rows;
+        const filtered = selectedAccounts ? rows.filter(r => selectedAccounts.has(r.external_id)) : rows;
         logItems('Т-Банк', `счетов разобрано (отфильтровано ${filtered.length} из ${rows.length})`, filtered, undefined);
         return [filtered, resp];
     }

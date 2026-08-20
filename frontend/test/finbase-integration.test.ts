@@ -35,25 +35,30 @@ async function apiGetUsers(superToken: string): Promise<{items: {id: string; ema
 function makeAccount(institutionName: string): Account {
     return {
         name: `Интеграционный счёт`,
+        type: "checking",
+        balance: 0,
+        owner: "",
         currency: "RUB",
-        institution_name: institutionName,
-        institution_domain: institutionName,
+        external_id: institutionName,
         provider_code: "test",
-        subtype: "checking",
         accountable_type: "Depository",
+        accountable_id: institutionName,
+        notes: "",
+        disabled_at: "",
+        excluded_report_at: "",
     };
 }
 
 function makeTransaction(institutionName: string, externalId: string): Transaction {
     return {
-        external_account_id: institutionName,
+        account: institutionName,
+        category: "",
+        tags: [],
         date: "2026-01-15",
-        amount: 100,
-        name: `Integration tx ${externalId}`,
+        amount: -100,
         currency: "RUB",
-        nature: "expense",
+        note: `Integration tx ${externalId}`,
         external_id: externalId,
-        source: "integration-test",
     };
 }
 
@@ -103,7 +108,7 @@ describe("Finbase integration (живой PocketBase)", () => {
         expect(after).toBe(before);
     });
 
-    it("external_id счёта = префиксованному ключу провайдера (institution_name)", async () => {
+    it("external_id счёта = префиксованному ключу провайдера", async () => {
         const domain = `test-ext-${Date.now()}`;
         const service = new FinbaseService(BASE_URL, token);
         await service.createAccountsIfNotExists([makeAccount(domain)]);

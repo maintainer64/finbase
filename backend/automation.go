@@ -35,6 +35,15 @@ type transactionRuleAction struct {
 }
 
 func registerAutomation(app *pocketbase.PocketBase) {
+	// Владелец счёта определяется аутентифицированной PocketBase-сессией.
+	// Клиенту не нужно разбирать JWT или передавать пустой relation вручную.
+	app.OnRecordCreateRequest("accounts").BindFunc(func(e *core.RecordRequestEvent) error {
+		if e.Record.GetString("owner") == "" && e.Auth != nil && e.Auth.Collection().Name == "users" {
+			e.Record.Set("owner", e.Auth.Id)
+		}
+		return e.Next()
+	})
+
 	// balance — вычисляемое поле. Клиент может прислать его для совместимости,
 	// но backend всегда заменяет значение фактической суммой операций.
 	app.OnRecordCreate("accounts").BindFunc(func(e *core.RecordEvent) error {

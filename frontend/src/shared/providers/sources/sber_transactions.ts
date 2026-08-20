@@ -175,38 +175,42 @@ export const sberTransactions: ProviderAny = {
             }
             const isoDate = (operation?.date ? new Date(operation.date.replace(/^(\d{2})\.(\d{2})\.(\d{4})/, '$3-$2-$1') + "+03:00") : new Date()).toISOString();
             const base = {
+                account: "",
+                category: "",
+                tags: [],
                 date: isoDate,
                 amount: Math.abs(parseFloat(operation?.operationAmount?.amount || "0.00")),
-                name: operation?.description || operation?.correspondent,
-                description: operation?.correspondent,
-                notes: getFullNotice(
+                currency: getCurrencyCodeMap(operation?.operationAmount?.currencyCode),
+                note: getFullNotice(
+                    operation?.description || operation?.correspondent,
+                    operation?.correspondent,
                     operation?.classificationCode,
                     operation?.type,
                     operation?.form,
                     operation?.imageUrl,
                 ),
-                currency: getCurrencyCodeMap(operation?.operationAmount?.currencyCode),
                 external_id: operation?.externalId,
-                source: PREFIX,
-                external_account_id: '',
-                nature: parseFloat(operation?.operationAmount?.amount || "0.00") > 0 ? 'income' : 'expense',
-            } as Transaction
+            } satisfies Transaction;
             if (operation?.fromResource?.id) {
                 const account = mapAccounts.find((acc) => acc.id === operation?.fromResource?.id) || mapAccounts?.[0]
-                rows.push({
-                    ...base,
-                    external_account_id: account.externalId,
-                    nature: 'expense',
-                })
+                if (account?.externalId) {
+                    rows.push({
+                        ...base,
+                        account: account.externalId,
+                        amount: -base.amount,
+                    })
+                }
             }
             if (operation?.toResource?.id) {
                 const account = mapAccounts.find((acc) => acc.id === operation?.toResource?.id) || mapAccounts?.[0]
-                rows.push({
-                    ...base,
-                    external_id: operation?.fromResource?.id ? `${operation?.externalId}_transfer` : `${operation?.externalId}`,
-                    external_account_id: account.externalId,
-                    nature: 'income',
-                })
+                if (account?.externalId) {
+                    rows.push({
+                        ...base,
+                        external_id: operation?.fromResource?.id ? `${operation?.externalId}_transfer` : `${operation?.externalId}`,
+                        account: account.externalId,
+                        amount: base.amount,
+                    })
+                }
             }
         }
         const filtered = filterByConfig(rows, params.config);
@@ -223,15 +227,18 @@ export const sberTransactions: ProviderAny = {
         for (const acct of productData?.ctaccounts?.data || []) {
             rows.push({
                 name: getAccountName(acct.name || 'Платёжный счёт', params.config['user-name'], 'Сбер'),
+                type: 'checking',
+                balance: 0,
+                owner: "",
                 currency: getCurrencyCodeMap(acct.balance?.currency?.code),
-                institution_name: `${PREFIX}ct-account:${acct.id}`,
-                institution_domain: BASE_URL_LOGO,
+                external_id: `${PREFIX}ct-account:${acct.id}`,
                 provider_code: 'sber',
                 accountable_id: acct.id || '',
-                subtype: 'checking',
                 accountable_type: 'Depository',
-                notes: acct.number ? `Счёт: ${acct.number}` : undefined,
-            } as Account);
+                notes: acct.number ? `Счёт: ${acct.number}` : "",
+                disabled_at: "",
+                excluded_report_at: "",
+            });
         }
 
         for (const dep of productData?.accounts?.data || []) {
@@ -241,20 +248,22 @@ export const sberTransactions: ProviderAny = {
 
             rows.push({
                 name: getAccountName(dep.name || 'Вклад', params.config['user-name'], 'Сбер'),
+                type: 'savings',
+                balance: 0,
+                owner: "",
                 currency: getCurrencyCodeMap(dep.balance?.currency?.code),
-                institution_name: `${PREFIX}account:${dep.id}`,
-                institution_domain: BASE_URL_LOGO,
+                external_id: `${PREFIX}account:${dep.id}`,
                 provider_code: 'sber',
                 accountable_id: dep.id || '',
-                subtype: 'savings',
                 accountable_type: 'Depository',
-                expiration_date: dep.closeDate || undefined,
-                notes: notesParts.join(';') || undefined,
-            } as Account);
+                notes: notesParts.join(';'),
+                disabled_at: "",
+                excluded_report_at: "",
+            });
         }
         const accountsFilter = params.config.accounts;
         const selectedSet = accountsFilter ? new Set(accountsFilter.split(',')) : null;
-        const filtered = selectedSet ? rows.filter(r => selectedSet.has(r.institution_name)) : rows;
+        const filtered = selectedSet ? rows.filter(r => selectedSet.has(r.external_id)) : rows;
         logItems("Сбер", `счетов разобрано (отфильтровано ${filtered.length} из ${rows.length})`, filtered, undefined);
         return [filtered, resp];
     },

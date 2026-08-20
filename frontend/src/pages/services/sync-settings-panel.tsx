@@ -141,8 +141,8 @@ export const SyncSettingsPanel: Component<{
                                     <label class="flex items-center gap-2 cursor-pointer hover:bg-gray-50 px-2 py-1 rounded-sm">
                                         <input
                                             type="checkbox"
-                                            checked={props.selectedAccounts.includes(account.institution_name)}
-                                            onChange={() => toggleAccount(account.institution_name)}
+                                            checked={props.selectedAccounts.includes(account.external_id)}
+                                            onChange={() => toggleAccount(account.external_id)}
                                             class="w-4 h-4 rounded-sm border-gray-300 text-blue-600 focus:ring-blue-500"
                                         />
                                         <span class="text-sm text-gray-700 truncate">{account.name}</span>
@@ -162,5 +162,4 @@ export const SyncSettingsPanel: Component<{
         </div>
     );
 };
-
 
