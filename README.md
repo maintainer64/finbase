@@ -240,10 +240,10 @@ go build ./...
 | `docker-backend.yml` | изменения backend, version tag, вручную | multi-arch `linux/amd64` + `linux/arm64` image в GHCR; PR только собирается |
 | `release.yml` | tag `v*` или вручную для существующего тега | проверенный ZIP расширения, SHA-256 и GitHub Release |
 
-Workflow используют актуальные stable majors: `actions/checkout@v7`,
-`actions/setup-go@v7`, `pnpm/setup@v2`, `actions/upload-artifact@v7`, Docker
-Setup/Login actions `@v4`, `docker/metadata-action@v6` и
-`docker/build-push-action@v7`.
+Workflow используют совместимые stable majors: `actions/checkout@v4`,
+`actions/setup-go@v5`, `pnpm/action-setup@v4`, `actions/setup-node@v4`,
+`actions/upload-artifact@v4`, Docker Setup/Login actions `@v4`,
+`docker/metadata-action@v6` и `docker/build-push-action@v7`.
 
 Обычный релиз не изменяет репозиторий сам. Сначала обновите версию
 `frontend/package.json`, затем создайте совпадающий тег:
