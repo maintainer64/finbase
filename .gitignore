@@ -2,11 +2,13 @@
 dist/
 build/
 build.zip
+/frontend/finbase/
 out/
 debug.*
 
 # Node.js modules
 node_modules/
+.playwright-mcp/
 
 # Editor and OS specific files
 .vscode/
@@ -18,6 +20,13 @@ Thumbs.db
 *.log
 tmp/
 temp/
+pb_data/
+.pb-data/
+.pnpm-store/
+
+# Finbase local binary (go build)
+backend/finbase
+backend/finbase-test
 
 # Environment variables
 .env

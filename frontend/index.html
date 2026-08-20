@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+<noscript>You need to enable JavaScript to run this app.</noscript>
+<div id="root"></div>
+<a href="#" type="hidden" style="display:none;" id="documentDownload"></a>
+<script>
+    // Лёгкий мок для запуска в обычном браузере (dev/preview). В самом расширении
+    // chrome-API настоящий и этот блок не используется.
+if (!window.chrome || !window.chrome.tabs) {
+        const none = {addListener(){}, removeListener(){}};
+        const port = () => ({postMessage(){}, onMessage: none, disconnect(){}, onDisconnect: none});
+        window.chrome = Object.assign(window.chrome ?? {}, {
+            tabs: {connect: port, query: () => Promise.resolve([{url: ''}]), onUpdated: none, onActivated: none, onRemoved: none},
+            windows: {onFocusChanged: none},
+            runtime: {connect: port, onMessage: none, sendMessage: () => Promise.resolve(undefined)},
+        });
+        // В обычном браузере outerWidth реальный; мок нужен только если он занулён (например, в iframe).
+if (!window.outerWidth) {
+        window.outerWidth = 1200;
+    }
+    }
+</script>
+<script type="module" src="/src/index.tsx"></script>
+<!--    !Font Awesome Free 6.5.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.-->
+</body>
+</html>

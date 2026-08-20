@@ -1,0 +1,20 @@
+services:
+  finbase_web:
+    image: ghcr.io/maintainer64/finbase_web:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finbase_web
+    restart: unless-stopped
+    volumes:
+      - ./pb_data:/pb/pb_data
+    environment:
+      FINBASE_OIDC_ISSUER: ${FINBASE_OIDC_ISSUER:-}
+      FINBASE_OIDC_CLIENT_ID: ${FINBASE_OIDC_CLIENT_ID:-}
+      FINBASE_OIDC_CLIENT_SECRET: ${FINBASE_OIDC_CLIENT_SECRET:-}
+      FINBASE_OIDC_DISPLAY_NAME: ${FINBASE_OIDC_DISPLAY_NAME:-Authelia}
+      FINBASE_DEMO: ${FINBASE_DEMO:-false}
+      FINBASE_DEMO_DAYS: ${FINBASE_DEMO_DAYS:-180}
+      FINBASE_TRANSFER_WINDOW_MINUTES: ${FINBASE_TRANSFER_WINDOW_MINUTES:-30}
+    ports:
+      - "8080:8080"

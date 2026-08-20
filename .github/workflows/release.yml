@@ -1,99 +1,86 @@
-name: Build and Release on Version Change
+name: Release Extension
 
 on:
   push:
-    branches: [ main, master ]
-    paths:
-      - 'package.json'
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish, for example v1.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  check-version-and-release:
+  release:
+    name: Build and publish
     runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
-
-    # Expose values to downstream jobs via `needs.check-version-and-release.outputs.*`
-    outputs:
-      version_changed: ${{ steps.version_check.outputs.version_changed }}
-      current_version: ${{ steps.current_version.outputs.current_version }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    defaults:
+      run:
+        working-directory: frontend
 
     steps:
-      - name: Checkout code
+      - name: Checkout release tag
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
 
-      - name: Get previous version
-        id: previous_version
-        run: |
-          git fetch --tags
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "previous_version=${LATEST_TAG#v}" >> $GITHUB_OUTPUT
-
-      - name: Get current version
-        id: current_version
-        run: |
-          CURRENT_VERSION=$(node -p "require('./package.json').version")
-          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-
-      - name: Check if version changed
-        id: version_check
-        run: |
-          if [ "${{ steps.previous_version.outputs.previous_version }}" != "${{ steps.current_version.outputs.current_version }}" ]; then
-            echo "version_changed=true" >> $GITHUB_OUTPUT
-            echo "Version changed from ${{ steps.previous_version.outputs.previous_version }} to ${{ steps.current_version.outputs.current_version }}"
-          else
-            echo "version_changed=false" >> $GITHUB_OUTPUT
-            echo "Version unchanged"
-          fi
-
-      - name: Create Git Tag
-        if: steps.version_check.outputs.version_changed == 'true'
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git tag -a "v${{ steps.current_version.outputs.current_version }}" -m "Release v${{ steps.current_version.outputs.current_version }}"
-          git push origin "v${{ steps.current_version.outputs.current_version }}"
-
-  build-and-release:
-    runs-on: ubuntu-latest
-    needs: check-version-and-release
-    if: needs.check-version-and-release.outputs.version_changed == 'true'
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v2
         with:
-          ref: "v${{ needs.check-version-and-release.outputs.current_version }}"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: 'pnpm'
+          package-json-file: frontend/package.json
+          cache: true
+          cache-dependency-path: frontend/pnpm-lock.yaml
+          runtime: node@24
+          install: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build application
-        run: pnpm build
+      - name: Verify tag matches package version
+        run: |
+          package_version="$(node --print "require('./package.json').version")"
+          test "$RELEASE_TAG" = "v$package_version"
 
-      - name: Rename build artifact
-        run: mv build.zip "bank-universal-sync-v${{ needs.check-version-and-release.outputs.current_version }}.zip"
+      - name: Test and build
+        run: |
+          pnpm lint
+          pnpm exec tsc --noEmit
+          pnpm test
+          pnpm build
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Prepare artifact and checksum
+        run: |
+          artifact="finbase-extension-$RELEASE_TAG.zip"
+          mv build.zip "$artifact"
+          sha256sum "$artifact" >"$artifact.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
         with:
-          tag_name: v${{ needs.check-version-and-release.outputs.current_version }}
-          name: Release v${{ needs.check-version-and-release.outputs.current_version }}
-          body: |
-            Automated release for version ${{ needs.check-version-and-release.outputs.current_version }}
+          name: finbase-extension-${{ env.RELEASE_TAG }}
+          path: |
+            frontend/finbase-extension-${{ env.RELEASE_TAG }}.zip
+            frontend/finbase-extension-${{ env.RELEASE_TAG }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
 
-            Chrome extension for universal bank data export.
-          draft: false
-          prerelease: false
-          files: bank-universal-sync-v${{ needs.check-version-and-release.outputs.current_version }}.zip
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "finbase-extension-$RELEASE_TAG.zip" \
+            "finbase-extension-$RELEASE_TAG.zip.sha256" \
+            --generate-notes \
+            --title "Finbase $RELEASE_TAG" \
+            --verify-tag

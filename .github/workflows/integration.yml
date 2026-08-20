@@ -1,69 +1,179 @@
-name: Integration Tests
+name: CI
 
 on:
-  workflow_dispatch:
   pull_request:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  sure-integration:
+  backend:
+    name: Backend
     runs-on: ubuntu-latest
-    env:
-      SURE_BASE_URL: http://localhost
-      SURE_API_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      SURE_ACCOUNT_DOMAIN: test-bank
+    defaults:
+      run:
+        working-directory: backend
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
         with:
-          node-version: '24'
-          cache: 'pnpm'
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build -trimpath -o finbase .
+
+      - name: Smoke-test demo seed
+        run: |
+          demo_dir="$(mktemp -d)"
+          ./finbase demo --dir="$demo_dir/pb_data" --days=30
+          ./finbase demo --dir="$demo_dir/pb_data" --days=30
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v2
+        with:
+          package-json-file: frontend/package.json
+          cache: true
+          cache-dependency-path: frontend/pnpm-lock.yaml
+          runtime: node@24
+          install: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Start Sure
-        run: docker compose -f test/compose.sure.yml up -d
+      - name: Lint
+        run: pnpm lint
 
-      - name: Wait for Sure to be ready
+      - name: Type-check
+        run: pnpm exec tsc --noEmit
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build extension
+        run: pnpm build
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: finbase-extension
+          path: frontend/build.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  integration:
+    name: PocketBase integration
+    runs-on: ubuntu-latest
+    needs:
+      - backend
+      - frontend
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      FINBASE_URL: http://127.0.0.1:8090
+      FINBASE_SUPERUSER_EMAIL: admin@finbase.local
+      FINBASE_SUPERUSER_PASSWORD: FinbaseAdmin2026!
+      FINBASE_EMAIL: test@finbase.local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v2
+        with:
+          package-json-file: frontend/package.json
+          cache: true
+          cache-dependency-path: frontend/pnpm-lock.yaml
+          runtime: node@24
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build PocketBase
+        working-directory: backend
+        run: go build -trimpath -o finbase .
+
+      - name: Start PocketBase
+        working-directory: backend
         run: |
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost/up > /dev/null; then
-              echo "Sure is up"; exit 0
+          mkdir -p .pb-data
+          ./finbase superuser upsert "$FINBASE_SUPERUSER_EMAIL" "$FINBASE_SUPERUSER_PASSWORD" --dir=.pb-data
+          nohup ./finbase serve --http=127.0.0.1:8090 --dir=.pb-data >.pb-data/pb.log 2>&1 &
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "$FINBASE_URL/api/health" >/dev/null; then
+              break
             fi
-            sleep 5
+            if [ "$attempt" -eq 60 ]; then
+              cat .pb-data/pb.log
+              exit 1
+            fi
+            sleep 1
           done
-          echo "Sure did not become ready in time"
-          docker compose -f test/compose.sure.yml logs web
-          exit 1
 
-      - name: Seed Sure
-        run: |
-          docker compose -f test/compose.sure.yml exec -T \
-            -e SEED_API_KEY="$SURE_API_KEY" \
-            -e SEED_ACCOUNT_DOMAIN="$SURE_ACCOUNT_DOMAIN" \
-            web bin/rails runner - < test/sure-seed.rb
+          token="$(curl --fail --silent --request POST \
+            "$FINBASE_URL/api/collections/_superusers/auth-with-password" \
+            --header 'Content-Type: application/json' \
+            --data "{\"identity\":\"$FINBASE_SUPERUSER_EMAIL\",\"password\":\"$FINBASE_SUPERUSER_PASSWORD\"}" \
+            | jq --raw-output '.token')"
 
-      - name: Seed Sure (инвестиционный счёт)
-        run: |
-          docker compose -f test/compose.sure.yml exec -T \
-            -e SEED_INVEST_DOMAIN=tinvest-test \
-            web bin/rails runner - < test/sure-seed-investment.rb
+          curl --fail --silent --request POST \
+            "$FINBASE_URL/api/collections/users/records" \
+            --header "Authorization: Bearer $token" \
+            --header 'Content-Type: application/json' \
+            --data "{\"email\":\"$FINBASE_EMAIL\",\"password\":\"TestUser2026!\",\"passwordConfirm\":\"TestUser2026!\",\"name\":\"Test\"}" \
+            >/dev/null
 
       - name: Run integration tests
         run: pnpm test:integration
 
-      - name: Dump Sure logs on failure
+      - name: Show PocketBase logs on failure
         if: failure()
-        run: docker compose -f test/compose.sure.yml logs
+        working-directory: backend
+        run: cat .pb-data/pb.log
 
-      - name: Teardown
+      - name: Stop PocketBase
         if: always()
-        run: docker compose -f test/compose.sure.yml down -v
+        run: pkill -f 'finbase serve' || true
