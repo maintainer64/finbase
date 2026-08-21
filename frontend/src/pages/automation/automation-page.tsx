@@ -7,6 +7,7 @@ import {
     Check,
     CircleDollarSign,
     Layers3,
+    ListChecks,
     Pencil,
     Plus,
     RefreshCw,
@@ -65,6 +66,7 @@ const formatDate = (value?: string, withTime = false): string => {
 };
 
 const PAGE_SIZE = 20;
+const GROUP_OPERATIONS_PAGE_SIZE = 50;
 
 interface PageState {
     page: number;
@@ -213,6 +215,164 @@ const RuleDialog: Component<{
     );
 };
 
+const GroupOperationsDialog: Component<{
+    group: OperationGroupRecord;
+    service: FinbaseService;
+    categories: CategoryRecord[];
+    initialCategory: string;
+    accountLabel: (accountId: string) => string;
+    onApplied: (count: number) => void;
+    onEmpty: () => void;
+    onClose: () => void;
+}> = (props) => {
+    const [items, setItems] = createSignal<TransactionRecord[]>([]);
+    const [selected, setSelected] = createSignal<Set<string>>(new Set());
+    const [category, setCategory] = createSignal(props.initialCategory);
+    const [pageState, setPageState] = createSignal<PageState>(emptyPage());
+    const [loading, setLoading] = createSignal(true);
+    const [savingSelection, setSavingSelection] = createSignal(false);
+    const [error, setError] = createSignal("");
+
+    const loadPage = async (page: number, reset = false) => {
+        const current = pageState();
+        if (!reset && (current.loading || current.page >= current.totalPages)) return;
+        if (reset) setLoading(true);
+        setPageState(state => ({...state, loading: true}));
+        setError("");
+        try {
+            const result = await props.service.getOperationGroupTransactionsPage(
+                props.group,
+                page,
+                GROUP_OPERATIONS_PAGE_SIZE,
+            );
+            if (reset && result.totalItems === 0) {
+                toast("Группа уже размечена и больше не содержит операций");
+                props.onEmpty();
+                return;
+            }
+            setItems(existing => reset ? result.items : [...existing, ...result.items]);
+            setPageState(loadedPage(result));
+        } catch (reason) {
+            setPageState(state => ({...state, loading: false}));
+            setError(reason instanceof Error ? reason.message : String(reason));
+        } finally {
+            if (reset) setLoading(false);
+        }
+    };
+
+    onMount(() => void loadPage(1, true));
+
+    const allLoadedSelected = createMemo(() => items().length > 0 && items().every(item => selected().has(item.id)));
+    const toggle = (id: string) => setSelected(current => {
+        const next = new Set(current);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+    });
+    const toggleLoaded = () => setSelected(current => {
+        const next = new Set(current);
+        if (allLoadedSelected()) items().forEach(item => next.delete(item.id));
+        else items().forEach(item => next.add(item.id));
+        return next;
+    });
+
+    const applySelection = async () => {
+        const ids = [...selected()];
+        if (!category()) {
+            toast.error("Выберите категорию");
+            return;
+        }
+        if (!ids.length) {
+            toast.error("Отметьте хотя бы одну операцию");
+            return;
+        }
+        setSavingSelection(true);
+        setError("");
+        try {
+            await props.service.categorizeTransactions(ids, category());
+            toast.success(`Размечено операций: ${ids.length}`);
+            props.onApplied(ids.length);
+        } catch (reason) {
+            const message = reason instanceof Error ? reason.message : String(reason);
+            setError(message);
+            toast.error(`Не удалось разметить операции: ${message}`);
+        } finally {
+            setSavingSelection(false);
+        }
+    };
+
+    return (
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" onClick={() => props.onClose()}>
+            <div class="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                <div class="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+                    <div class="min-w-0">
+                        <div class="text-xs font-semibold uppercase tracking-[.18em] text-blue-500">Массовая разметка</div>
+                        <h2 class="mt-1 truncate text-xl font-semibold text-slate-900" title={props.group.name}>{props.group.name}</h2>
+                        <p class="mt-1 text-xs text-slate-500">Выберите только те операции, которым нужно назначить категорию. Правило при этом не создаётся.</p>
+                    </div>
+                    <button class="flex size-9 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={() => props.onClose()} aria-label="Закрыть"><X size={19}/></button>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-3 border-b border-slate-100 bg-slate-50/80 px-5 py-3">
+                    <label class="min-w-56 flex-1">
+                        <span class="sr-only">Категория</span>
+                        <select class={inputClass} value={category()} onInput={(event) => setCategory(event.currentTarget.value)}>
+                            <option value="">Выберите категорию…</option>
+                            <For each={props.categories}>{(item) => <option value={item.id}>{item.name}</option>}</For>
+                        </select>
+                    </label>
+                    <button type="button" class="secondary-button" onClick={toggleLoaded} disabled={items().length === 0}>
+                        <ListChecks size={16}/>{allLoadedSelected() ? "Снять со всех загруженных" : "Выбрать все загруженные"}
+                    </button>
+                    <span class="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700">Выбрано: {selected().size}</span>
+                </div>
+
+                <div class="min-h-48 flex-1 overflow-auto">
+                    <Show when={error()}><div class="m-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error()}</div></Show>
+                    <Show when={!loading()} fallback={<div class="flex justify-center py-12"><FaSolidSpinner class="animate-spin text-xl text-blue-500"/></div>}>
+                        <Show when={items().length > 0} fallback={<div class="p-10 text-center text-sm text-slate-400">В этой группе неразмеченных операций больше нет.</div>}>
+                            <div class="divide-y divide-slate-100">
+                                <For each={items()}>{(transaction) => (
+                                    <label class="flex cursor-pointer items-center gap-3 px-5 py-3 transition hover:bg-blue-50/40">
+                                        <input type="checkbox" checked={selected().has(transaction.id)} onChange={() => toggle(transaction.id)}/>
+                                        <span class="min-w-0 flex-1">
+                                            <span class="flex min-w-0 items-center gap-2">
+                                                <span class="truncate text-sm font-medium text-slate-800">{transaction.note || "Без описания"}</span>
+                                                <span class="hidden shrink-0 text-xs text-slate-400 sm:inline">{formatDate(transaction.date, true)}</span>
+                                            </span>
+                                            <span class="block truncate text-xs text-slate-400">{props.accountLabel(transaction.account)}<span class="sm:hidden"> · {formatDate(transaction.date, true)}</span></span>
+                                        </span>
+                                        <span class="shrink-0 text-right">
+                                            <span class={`block text-sm font-semibold tabular-nums ${transaction.amount >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{money.format(transaction.amount)}</span>
+                                            <span class="block text-[11px] text-slate-400">{transaction.currency}</span>
+                                        </span>
+                                    </label>
+                                )}</For>
+                            </div>
+                            <LoadMoreSentinel
+                                hasMore={pageState().page < pageState().totalPages}
+                                loading={pageState().loading}
+                                onLoad={() => void loadPage(pageState().page + 1)}
+                            />
+                        </Show>
+                    </Show>
+                </div>
+
+                <div class="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
+                    <span class="text-xs text-slate-400">Показано {items().length} из {pageState().totalItems}</span>
+                    <div class="flex gap-2">
+                        <button type="button" class="rounded-xl px-4 py-2 text-sm text-slate-600 hover:bg-slate-100" onClick={() => props.onClose()}>Отмена</button>
+                        <button type="button" class="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50" disabled={savingSelection() || selected().size === 0 || !category()} onClick={() => void applySelection()}>
+                            <Show when={!savingSelection()} fallback={<FaSolidSpinner class="animate-spin"/>}><Check size={16}/></Show>
+                            Разметить выбранные
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 export const AutomationPage: Component = () => {
     const standalone = useFullAppWindow();
     const [finbaseUrl] = useSetting("finbase-url");
@@ -236,6 +396,7 @@ export const AutomationPage: Component = () => {
     const [error, setError] = createSignal("");
     const [saving, setSaving] = createSignal(false);
     const [dialog, setDialog] = createSignal<RuleDraft | null>(null);
+    const [groupDialog, setGroupDialog] = createSignal<OperationGroupRecord | null>(null);
     const [activeTab, setActiveTab] = createSignal<AutomationTab>("transfers");
 
     const accountById = createMemo(() => new Map(accounts().map((item) => [item.id, item])));
@@ -574,7 +735,7 @@ export const AutomationPage: Component = () => {
                     <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                         <div class="border-b border-slate-100 px-5 py-4">
                             <h2 class="font-semibold text-slate-900">Похожие операции без категории</h2>
-                            <p class="mt-1 text-xs text-slate-500">Повторяющиеся названия собраны автоматически. Выберите категорию — правило применится и к уже загруженной истории.</p>
+                            <p class="mt-1 text-xs text-slate-500">Создайте правило для всей подходящей истории или откройте группу и разметьте только выбранные операции.</p>
                         </div>
                         <Show when={groups().length} fallback={<div class="p-8 text-center text-sm text-slate-400">Повторяющихся неразмеченных операций нет.</div>}>
                             <div class="divide-y divide-slate-100">
@@ -592,7 +753,10 @@ export const AutomationPage: Component = () => {
                                             <option value="">Выберите категорию…</option>
                                             <For each={categories()}>{(category) => <option value={category.id}>{category.name}</option>}</For>
                                         </select>
-                                        <button class="whitespace-nowrap rounded-xl bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" onClick={() => void createRuleFromGroup(group)}>Создать правило</button>
+                                        <div class="flex flex-wrap justify-end gap-2">
+                                            <button class="secondary-button whitespace-nowrap" onClick={() => setGroupDialog(group)}><ListChecks size={15}/> Выбрать операции</button>
+                                            <button class="whitespace-nowrap rounded-xl bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" onClick={() => void createRuleFromGroup(group)}>Создать правило</button>
+                                        </div>
                                     </div>
                                 )}</For>
                             </div>
@@ -713,6 +877,26 @@ export const AutomationPage: Component = () => {
             </div>
 
             <Show when={dialog()}>{(current) => <RuleDialog initial={current()} categories={categories()} saving={saving()} onSave={(draft) => void saveRule(draft)} onClose={() => setDialog(null)}/>}</Show>
+            <Show when={groupDialog()}>{(current) => (
+                <Show when={service()}>{(api) => (
+                    <GroupOperationsDialog
+                        group={current()}
+                        service={api()}
+                        categories={categories()}
+                        initialCategory={groupCategories()[current().id] || ""}
+                        accountLabel={(accountId) => accountName(accountById().get(accountId))}
+                        onApplied={() => {
+                            setGroupDialog(null);
+                            void load("groups");
+                        }}
+                        onEmpty={() => {
+                            setGroupDialog(null);
+                            void load("groups");
+                        }}
+                        onClose={() => setGroupDialog(null)}
+                    />
+                )}</Show>
+            )}</Show>
         </Show>
     );
 };

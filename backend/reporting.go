@@ -112,7 +112,7 @@ func configureReportingTimezone(app core.App) error {
 		(row_number() over (order by x.transactions_count desc, x.group_key) - 1) as id,
 		x.group_key, x.name, x.transaction_type, x.transactions_count, x.total, x.first_date, x.last_date
 	FROM (
-		SELECT lower(trim(t.note)) || ':' || case when t.amount >= 0 then 'income' else 'expense' end as group_key,
+		SELECT lower(t.note) || ':' || case when t.amount >= 0 then 'income' else 'expense' end as group_key,
 			min(t.note) as name,
 			case when t.amount >= 0 then 'income' else 'expense' end as transaction_type,
 			count(*) as transactions_count,
@@ -124,7 +124,7 @@ func configureReportingTimezone(app core.App) error {
 			AND coalesce(t.category, '') = '' AND trim(coalesce(t.note, '')) != ''
 			AND NOT EXISTS (SELECT 1 FROM transfers tr WHERE tr.status = 'accepted'
 				AND (tr.inflow_transaction = t.id OR tr.outflow_transaction = t.id))
-		GROUP BY lower(trim(t.note)), case when t.amount >= 0 then 'income' else 'expense' end
+		GROUP BY lower(t.note), case when t.amount >= 0 then 'income' else 'expense' end
 		HAVING count(*) >= 2
 	) x`
 	if operationGroups.ViewQuery != operationGroupsQuery {

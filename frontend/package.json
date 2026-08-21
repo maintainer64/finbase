@@ -1,7 +1,7 @@
 {
   "name": "finbase",
   "repository": "maintainer64/finbase",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "description": "Finbase personal finance browser extension",
   "main": "src/index.tsx",
   "scripts": {

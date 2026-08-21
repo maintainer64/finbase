@@ -51,6 +51,10 @@ export function normalizeDate(value: string): string {
 }
 
 const filterValue = (value: string): string => JSON.stringify(value);
+const TRANSFER_CATEGORY_NAME = "Переводы";
+// SQLite LOWER() без ICU меняет регистр только ASCII. Используем ту же
+// нормализацию, что и operation_groups, иначе русские названия не совпадут.
+const sqliteLower = (value: string): string => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 
 /** Добавляет банковскому id операции пространство имён её провайдера. */
 export const providerExternalId = (providerCode: string, externalId: unknown): string => {
@@ -285,7 +289,8 @@ export class FinbaseService implements ProviderSync {
 
     /** Список категорий (id, имя, цвет, родитель) — для фильтров и иерархии диаграмм. */
     async getCategories(): Promise<CategoryRecord[]> {
-        return this.listAll("categories");
+        const categories = await this.listAll("categories");
+        return categories.filter(category => category.name !== TRANSFER_CATEGORY_NAME);
     }
 
     /** Список тегов (id, имя, цвет). */
@@ -317,6 +322,34 @@ export class FinbaseService implements ProviderSync {
 
     async getOperationGroupsPage(page: number, perPage: number): Promise<PocketBaseListResponse<OperationGroupRecord>> {
         return this.listPage("operation_groups", page, perPage, {sort: "-transactions_count"});
+    }
+
+    /** Неразмеченные операции конкретной группы, без выгрузки всей истории. */
+    async getOperationGroupTransactionsPage(
+        group: OperationGroupRecord,
+        page: number,
+        perPage: number,
+    ): Promise<PocketBaseListResponse<TransactionRecord>> {
+        const natureFilter = group.transaction_type === "income" ? "amount >= 0" : "amount < 0";
+        const filter = [
+            `category = ""`,
+            `note:lower = ${filterValue(sqliteLower(group.name))}`,
+            natureFilter,
+        ].join(" && ");
+        return this.listPage("transactions", page, perPage, {filter, sort: "-date"});
+    }
+
+    /** Назначает категорию только выбранным операциям, небольшими параллельными пачками. */
+    async categorizeTransactions(ids: string[], category: string, concurrency = 5): Promise<void> {
+        const queue = [...new Set(ids.filter(Boolean))];
+        let next = 0;
+        const worker = async () => {
+            while (next < queue.length) {
+                const id = queue[next++];
+                await this.updateRecord("transactions", id, {category});
+            }
+        };
+        await Promise.all(Array.from({length: Math.min(concurrency, queue.length)}, () => worker()));
     }
 
     async getTransfersPage(

@@ -65,6 +65,56 @@ describe("пагинация Finbase", () => {
             'account = "account-1" && day >= "2026-08-01" && day <= "2026-08-31"',
         );
     });
+
+    it("загружает только одну страницу операций выбранной группы", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
+            page: 1,
+            perPage: 50,
+            totalItems: 84,
+            totalPages: 2,
+            items: [],
+        }), {status: 200, headers: {"Content-Type": "application/json"}}));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const service = new FinbaseService("https://finbase.example", token);
+        const result = await service.getOperationGroupTransactionsPage({
+            id: "group-1",
+            group_key: "яндекс лавка:expense",
+            name: "Яндекс Лавка",
+            transaction_type: "expense",
+            transactions_count: 84,
+            total: -42000,
+            first_date: "2026-01-01",
+            last_date: "2026-08-01",
+        }, 1, 50);
+
+        expect(result.totalItems).toBe(84);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const url = new URL(String(fetchMock.mock.calls[0][0]));
+        expect(url.searchParams.get("perPage")).toBe("50");
+        expect(url.searchParams.get("sort")).toBe("-date");
+        expect(url.searchParams.get("filter")).toBe(
+            'category = "" && note:lower = "Яндекс Лавка" && amount < 0',
+        );
+    });
+
+    it("массово размечает только уникальные выбранные операции", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({id: "updated"}), {
+            status: 200,
+            headers: {"Content-Type": "application/json"},
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const service = new FinbaseService("https://finbase.example", token);
+        await service.categorizeTransactions(["transaction-1", "transaction-2", "transaction-1"], "category-1", 2);
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        for (const [input, init] of fetchMock.mock.calls) {
+            expect(init?.method).toBe("PATCH");
+            expect(new URL(String(input)).pathname).toMatch(/\/collections\/transactions\/records\/transaction-[12]$/);
+            expect(JSON.parse(String(init?.body))).toEqual({category: "category-1"});
+        }
+    });
 });
 
 describe("серверные фильтры таблицы данных", () => {
