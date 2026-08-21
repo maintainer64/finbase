@@ -215,14 +215,14 @@ export class FinbaseService implements ProviderSync {
 
     // ==================== Чтение данных для страницы «Статистика» ====================
 
-    /** Постраничное чтение коллекции/view (perPage=200, цикл по страницам). */
+    /** Постраничное чтение коллекции/view (perPage=5000, цикл по страницам). */
     async listAll<K extends CollectionName>(collection: K, filter = ""): Promise<CollectionRecords[K][]> {
         const items: CollectionRecords[K][] = [];
         let page = 1;
         while (true) {
             const result = await this.request<PocketBaseListResponse<CollectionRecords[K]>>(
                 "GET",
-                `collections/${collection}/records?perPage=200&page=${page}&filter=${encodeURIComponent(filter)}`,
+                `collections/${collection}/records?perPage=5000&page=${page}&filter=${encodeURIComponent(filter)}`,
             );
             items.push(...result.items);
             if (items.length >= result.totalItems || result.items.length === 0) return items;
@@ -257,12 +257,20 @@ export class FinbaseService implements ProviderSync {
         return this.listAll("users");
     }
 
-    /** Потоки по дням для выбранных счетов (фильтр "account = 'id' || account = 'id2'"). */
-    async getDailyFlows(accountIds: string[]): Promise<DailyFlowRecord[]> {
-        const filter = accountIds.length
-            ? accountIds.map(id => `account = ${filterValue(id)}`).join(" || ")
-            : "";
-        return this.listAll("daily_flows", filter);
+    private statisticsFilter(accountIds: string[], from = "", to = ""): string {
+        const filters: string[] = [];
+        if (accountIds.length) {
+            const accounts = accountIds.map(id => `account = ${filterValue(id)}`).join(" || ");
+            filters.push(accountIds.length > 1 ? `(${accounts})` : accounts);
+        }
+        if (from) filters.push(`day >= ${filterValue(from)}`);
+        if (to) filters.push(`day <= ${filterValue(to)}`);
+        return filters.join(" && ");
+    }
+
+    /** Потоки по дням для выбранных счетов и периода. */
+    async getDailyFlows(accountIds: string[], from = "", to = ""): Promise<DailyFlowRecord[]> {
+        return this.listAll("daily_flows", this.statisticsFilter(accountIds, from, to));
     }
 
     /** Итоги по размеченным категориям (все время). */
@@ -271,11 +279,8 @@ export class FinbaseService implements ProviderSync {
     }
 
     /** Размеченные потоки: (день, счёт, категория, теги) — для фильтров статистики. */
-    async getFlowSplits(accountIds: string[]): Promise<FlowSplitRecord[]> {
-        const filter = accountIds.length
-            ? accountIds.map(id => `account = ${filterValue(id)}`).join(" || ")
-            : "";
-        return this.listAll("flow_splits", filter);
+    async getFlowSplits(accountIds: string[], from = "", to = ""): Promise<FlowSplitRecord[]> {
+        return this.listAll("flow_splits", this.statisticsFilter(accountIds, from, to));
     }
 
     /** Список категорий (id, имя, цвет, родитель) — для фильтров и иерархии диаграмм. */

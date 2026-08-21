@@ -28,8 +28,8 @@ func reportingTimezoneOffset() string {
 	return value
 }
 
-// configureReportingTimezone обновляет view и на уже существующей базе.
-// Это позволяет менять часовой пояс без добавления ещё одной миграции.
+// configureReportingTimezone обновляет отчётные view и на уже существующей
+// базе: применяет часовой пояс и исключает подтверждённые внутренние переводы.
 func configureReportingTimezone(app core.App) error {
 	offset := reportingTimezoneOffset()
 	day := func(column string) string { return fmt.Sprintf("date(%s, '%s')", column, offset) }
@@ -72,12 +72,65 @@ func configureReportingTimezone(app core.App) error {
 		SELECT t.account, %[1]s as day, t.category, t.tags, sum(t.amount) as delta
 		FROM transactions t JOIN accounts a ON a.id = t.account
 		WHERE coalesce(a.excluded_report_at, '') = ''
+			AND NOT EXISTS (SELECT 1 FROM transfers tr WHERE tr.status = 'accepted'
+				AND (tr.inflow_transaction = t.id OR tr.outflow_transaction = t.id))
 		GROUP BY t.account, %[1]s, t.category, t.tags
 	) x`, day("t.date"))
 	if flowSplits.ViewQuery != flowSplitsQuery {
 		flowSplits.ViewQuery = flowSplitsQuery
 		if err := app.Save(flowSplits); err != nil {
 			return fmt.Errorf("save flow_splits timezone: %w", err)
+		}
+	}
+
+	categorySums, err := app.FindCollectionByNameOrId("category_sums")
+	if err != nil {
+		return err
+	}
+	categorySumsQuery := `SELECT
+		(row_number() over (order by c.name) - 1) as id,
+		t.category, c.name, c.color, c.parent_category, c.lucide_icon, sum(t.amount) as total
+	FROM transactions t
+	JOIN categories c ON c.id = t.category
+	JOIN accounts a ON a.id = t.account
+	WHERE coalesce(a.excluded_report_at, '') = ''
+		AND NOT EXISTS (SELECT 1 FROM transfers tr WHERE tr.status = 'accepted'
+			AND (tr.inflow_transaction = t.id OR tr.outflow_transaction = t.id))
+	GROUP BY t.category, c.name, c.color, c.parent_category, c.lucide_icon`
+	if categorySums.ViewQuery != categorySumsQuery {
+		categorySums.ViewQuery = categorySumsQuery
+		if err := app.Save(categorySums); err != nil {
+			return fmt.Errorf("save category_sums transfers filter: %w", err)
+		}
+	}
+
+	operationGroups, err := app.FindCollectionByNameOrId("operation_groups")
+	if err != nil {
+		return err
+	}
+	operationGroupsQuery := `SELECT
+		(row_number() over (order by x.transactions_count desc, x.group_key) - 1) as id,
+		x.group_key, x.name, x.transaction_type, x.transactions_count, x.total, x.first_date, x.last_date
+	FROM (
+		SELECT lower(trim(t.note)) || ':' || case when t.amount >= 0 then 'income' else 'expense' end as group_key,
+			min(t.note) as name,
+			case when t.amount >= 0 then 'income' else 'expense' end as transaction_type,
+			count(*) as transactions_count,
+			sum(t.amount) as total,
+			min(t.date) as first_date,
+			max(t.date) as last_date
+		FROM transactions t JOIN accounts a ON a.id = t.account
+		WHERE coalesce(a.excluded_report_at, '') = ''
+			AND coalesce(t.category, '') = '' AND trim(coalesce(t.note, '')) != ''
+			AND NOT EXISTS (SELECT 1 FROM transfers tr WHERE tr.status = 'accepted'
+				AND (tr.inflow_transaction = t.id OR tr.outflow_transaction = t.id))
+		GROUP BY lower(trim(t.note)), case when t.amount >= 0 then 'income' else 'expense' end
+		HAVING count(*) >= 2
+	) x`
+	if operationGroups.ViewQuery != operationGroupsQuery {
+		operationGroups.ViewQuery = operationGroupsQuery
+		if err := app.Save(operationGroups); err != nil {
+			return fmt.Errorf("save operation_groups transfers filter: %w", err)
 		}
 	}
 

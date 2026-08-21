@@ -13,6 +13,7 @@ const formatter = new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 0});
 const money = (value: number) => `${formatter.format(value)} ₽`;
 
 export const CategoryDonut: Component<{
+    title: string;
     items: DonutItem[];
     onSelect: (id: string) => void;
 }> = (props) => {
@@ -37,7 +38,7 @@ export const CategoryDonut: Component<{
                 left: "center",
                 top: "center",
                 children: [
-                    {type: "text", style: {text: "Расходы", x: 0, y: -12, textAlign: "center", fill: dark ? "#94a3b8" : "#64748b", font: "500 11px Inter, sans-serif"}},
+                    {type: "text", style: {text: props.title, x: 0, y: -12, textAlign: "center", fill: dark ? "#94a3b8" : "#64748b", font: "500 11px Inter, sans-serif"}},
                     {type: "text", style: {text: money(total), x: 0, y: 9, textAlign: "center", fill: dark ? "#f8fafc" : "#0f172a", font: "700 15px Inter, sans-serif"}},
                 ],
             }],
@@ -70,7 +71,7 @@ export const CategoryDonut: Component<{
     return (
         <EChart
             option={option()}
-            ariaLabel="Расходы по категориям"
+            ariaLabel={`${props.title} по категориям`}
             onClick={(event) => {
                 const id = (event.data as {id?: string} | undefined)?.id;
                 if (id) props.onSelect(id);

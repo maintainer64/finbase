@@ -157,6 +157,8 @@ func createOperationGroups(app core.App, authRule *string) error {
 		FROM transactions t JOIN accounts a ON a.id = t.account
 		WHERE coalesce(a.excluded_report_at, '') = ''
 			AND coalesce(t.category, '') = '' AND trim(coalesce(t.note, '')) != ''
+			AND NOT EXISTS (SELECT 1 FROM transfers tr WHERE tr.status = 'accepted'
+				AND (tr.inflow_transaction = t.id OR tr.outflow_transaction = t.id))
 		GROUP BY lower(trim(t.note)), case when t.amount >= 0 then 'income' else 'expense' end
 		HAVING count(*) >= 2
 	) x`
@@ -179,6 +181,8 @@ func createFlowSplits(app core.App, authRule *string) error {
 		SELECT t.account, date(t.date) as day, t.category, t.tags, sum(t.amount) as delta
 		FROM transactions t JOIN accounts a ON a.id = t.account
 		WHERE coalesce(a.excluded_report_at, '') = ''
+			AND NOT EXISTS (SELECT 1 FROM transfers tr WHERE tr.status = 'accepted'
+				AND (tr.inflow_transaction = t.id OR tr.outflow_transaction = t.id))
 		GROUP BY t.account, date(t.date), t.category, t.tags
 	) x`
 	flowSplits.Fields.Add(
@@ -335,6 +339,8 @@ func upgradeExistingSchema(app core.App, authRule *string) error {
 	JOIN categories c ON c.id = t.category
 	JOIN accounts a ON a.id = t.account
 	WHERE coalesce(a.excluded_report_at, '') = ''
+		AND NOT EXISTS (SELECT 1 FROM transfers tr WHERE tr.status = 'accepted'
+			AND (tr.inflow_transaction = t.id OR tr.outflow_transaction = t.id))
 	GROUP BY t.category, c.name, c.color, c.parent_category, c.lucide_icon`
 	categorySums.Fields.Add(
 		&core.TextField{Name: "category"}, &core.TextField{Name: "name"},
@@ -485,6 +491,8 @@ func init() {
 		JOIN categories c ON c.id = t.category
 		JOIN accounts a ON a.id = t.account
 		WHERE coalesce(a.excluded_report_at, '') = ''
+			AND NOT EXISTS (SELECT 1 FROM transfers tr WHERE tr.status = 'accepted'
+				AND (tr.inflow_transaction = t.id OR tr.outflow_transaction = t.id))
 		GROUP BY t.category, c.name, c.color, c.parent_category, c.lucide_icon`
 		categorySums.Fields.Add(
 			&core.TextField{Name: "category"}, &core.TextField{Name: "name"},

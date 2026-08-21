@@ -1,4 +1,4 @@
-import {Component, createEffect, createMemo, createSignal, For, Show, untrack} from "solid-js";
+import {Component, createEffect, createMemo, createSignal, For, onCleanup, Show, untrack} from "solid-js";
 import {FaSolidDatabase, FaSolidPen, FaSolidPlus, FaSolidSpinner, FaSolidTrash, FaSolidXmark} from "solid-icons/fa";
 import {toast} from "solid-toast";
 import {useSetting} from "@/shared/settings";
@@ -9,6 +9,7 @@ import {MultiSelect} from "@/pages/statistics/multi-select";
 import {CategoryIcon, CategoryIconPicker} from "@/components/ui/category-icon";
 import {ArrowDown, ArrowUp, ArrowUpDown, Maximize2, RotateCcw, Search} from "lucide-solid";
 import {openFinbaseTab, useFullAppWindow} from "@/shared/open-finbase";
+import {buildDataFilter, EMPTY_RELATION_FILTER} from "./data-filter";
 
 type UiRecord = PocketBaseRecord & Record<string, unknown>;
 
@@ -152,21 +153,6 @@ interface FormModalProps {
 }
 
 const toDateInput = (value: unknown): string => String(value ?? "").split(/[T\s]/)[0] ?? "";
-
-const searchableValue = (record: UiRecord, field: FieldSpec, labels: RelOptions): string => {
-    const raw = record[field.name];
-    if (field.kind === "relation") {
-        return labels.get(field.relation!)?.find((option) => option.id === String(raw))?.label ?? "";
-    }
-    if (field.kind === "relation-many") {
-        const ids = Array.isArray(raw) ? raw.map(String) : [];
-        return (labels.get(field.relation!) ?? [])
-            .filter((option) => ids.includes(option.id))
-            .map((option) => option.label)
-            .join(" ");
-    }
-    return String(raw ?? "");
-};
 
 const RecordFormModal: Component<FormModalProps> = (props) => {
     const [values, setValues] = createSignal<Record<string, unknown>>(untrack(() => {
@@ -313,8 +299,8 @@ const CellValue: Component<CellValueProps> = (props) => {
     );
 };
 
-const DISPLAY_LIMIT = 500;
-const EMPTY_RELATION_FILTER = "__empty_relation__";
+const DATA_PAGE_SIZE = 50;
+const TRANSACTION_RELATION_LIMIT = 100;
 
 export const DataPage: Component = () => {
     const fullApp = useFullAppWindow();
@@ -332,19 +318,30 @@ export const DataPage: Component = () => {
     const [records, setRecords] = createSignal<UiRecord[]>([]);
     const [relationOptions, setRelationOptions] = createSignal<RelOptions>(new Map());
     const [loading, setLoading] = createSignal(true);
+    const [loadingMore, setLoadingMore] = createSignal(false);
+    const [page, setPage] = createSignal(0);
+    const [totalPages, setTotalPages] = createSignal(1);
+    const [totalItems, setTotalItems] = createSignal(0);
     const [error, setError] = createSignal("");
     const [modal, setModal] = createSignal<{record: UiRecord | null} | null>(null);
     const [saving, setSaving] = createSignal(false);
     const [search, setSearch] = createSignal("");
+    const [debouncedSearch, setDebouncedSearch] = createSignal("");
     const [fieldFilters, setFieldFilters] = createSignal<Record<string, string>>({});
     const [fromDate, setFromDate] = createSignal("");
     const [toDate, setToDate] = createSignal("");
     const [amountKind, setAmountKind] = createSignal<"" | "income" | "expense">("");
     const [sort, setSort] = createSignal<{field: string; direction: "asc" | "desc"}>({field: "name", direction: "asc"});
+    const [reloadVersion, setReloadVersion] = createSignal(0);
+    const [tableContainer, setTableContainer] = createSignal<HTMLDivElement>();
+    const [loadMoreSentinel, setLoadMoreSentinel] = createSignal<HTMLDivElement>();
+    let listRequestId = 0;
+    let optionsRequestId = 0;
 
     createEffect(() => {
         collectionName();
         setSearch("");
+        setDebouncedSearch("");
         setFieldFilters({});
         setFromDate("");
         setToDate("");
@@ -354,15 +351,19 @@ export const DataPage: Component = () => {
         setSort({field: date?.name ?? current.displayField, direction: date ? "desc" : "asc"});
     });
 
-    const load = (service: FinbaseService, coll: CollectionSpec) => {
-        setLoading(true);
-        setError("");
+    createEffect(() => {
+        const value = search();
+        const timer = window.setTimeout(() => setDebouncedSearch(value.trim()), 250);
+        onCleanup(() => window.clearTimeout(timer));
+    });
+
+    const loadRelationOptions = async (service: FinbaseService, coll: CollectionSpec) => {
+        const requestId = ++optionsRequestId;
         const needsOptions = [...new Set(coll.fields
             .filter((f) => f.relation)
             .map((f) => f.relation!))];
-        Promise.all([
-            service.listAll(coll.collection, ""),
-            ...needsOptions.map((rel) => {
+        try {
+            const optionGroups = await Promise.all(needsOptions.map((rel) => {
                 if (rel === "users") {
                     return service.getUsers().then((items) => ({
                         rel,
@@ -374,7 +375,10 @@ export const DataPage: Component = () => {
                 }
                 const relSpec = COLLECTIONS.find((c) => c.collection === rel);
                 if (!relSpec) return Promise.resolve({rel, items: []});
-                return service.listAll(relSpec.collection).then((items) => ({
+                const records = rel === "transactions"
+                    ? service.listPage("transactions", 1, TRANSACTION_RELATION_LIMIT, {sort: "-date"}).then(result => result.items)
+                    : service.listAll(relSpec.collection);
+                return records.then((items) => ({
                     rel,
                     items: items.map((record) => {
                         const item = record as unknown as UiRecord;
@@ -388,23 +392,88 @@ export const DataPage: Component = () => {
                         };
                     }),
                 }));
-            }),
-        ])
-            .then(([list, ...optionGroups]) => {
-                const options = new Map<string, {id: string; label: string; color?: string; icon?: string}[]>();
-                for (const group of optionGroups) options.set(group.rel, group.items);
-                setRelationOptions(options);
-                setRecords(list.map((record) => record as unknown as UiRecord));
-            })
-            .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-            .finally(() => setLoading(false));
+            }));
+            if (requestId !== optionsRequestId) return;
+            const options = new Map<string, {id: string; label: string; color?: string; icon?: string}[]>();
+            for (const group of optionGroups) options.set(group.rel, group.items);
+            setRelationOptions(options);
+        } catch (cause) {
+            if (requestId === optionsRequestId) setError(cause instanceof Error ? cause.message : String(cause));
+        }
+    };
+
+    const serverFilter = createMemo(() => buildDataFilter(
+        spec(),
+        debouncedSearch(),
+        fieldFilters(),
+        fromDate(),
+        toDate(),
+        amountKind(),
+    ));
+    const serverSort = createMemo(() => `${sort().direction === "desc" ? "-" : ""}${sort().field}`);
+    const hasMore = createMemo(() => page() < totalPages());
+
+    const loadPage = async (
+        service: FinbaseService,
+        coll: CollectionSpec,
+        targetPage: number,
+        reset: boolean,
+        filter: string,
+        sortValue: string,
+    ) => {
+        if (!reset && (loadingMore() || !hasMore())) return;
+        const requestId = reset ? ++listRequestId : listRequestId;
+        if (reset) {
+            setLoading(true);
+            setRecords([]);
+            setPage(0);
+            setTotalPages(1);
+            setTotalItems(0);
+            setError("");
+        } else {
+            setLoadingMore(true);
+        }
+        try {
+            const result = await service.listPage(coll.collection, targetPage, DATA_PAGE_SIZE, {
+                filter,
+                sort: sortValue,
+            });
+            if (requestId !== listRequestId) return;
+            setRecords(current => {
+                const items = result.items.map(record => record as unknown as UiRecord);
+                if (reset) return items;
+                const byId = new Map(current.map(record => [record.id, record]));
+                for (const item of items) byId.set(item.id, item);
+                return [...byId.values()];
+            });
+            setPage(result.page);
+            setTotalPages(result.totalPages || 1);
+            setTotalItems(result.totalItems);
+        } catch (cause) {
+            if (requestId === listRequestId) setError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+            if (requestId === listRequestId) {
+                setLoading(false);
+                setLoadingMore(false);
+            }
+        }
     };
 
     createEffect(() => {
         const service = finbase();
         const coll = spec();
+        reloadVersion();
+        if (service && fullApp()) void loadRelationOptions(service, coll);
+    });
+
+    createEffect(() => {
+        const service = finbase();
+        const coll = spec();
+        const filter = serverFilter();
+        const sortValue = serverSort();
+        reloadVersion();
         if (service && fullApp()) {
-            load(service, coll);
+            void loadPage(service, coll, 1, true, filter, sortValue);
         } else if (!service && fullApp()) {
             setLoading(false);
             setError("Подключите Finbase в настройках, чтобы управлять данными");
@@ -412,6 +481,26 @@ export const DataPage: Component = () => {
             setLoading(false);
             setError("");
         }
+    });
+
+    const reload = () => setReloadVersion(value => value + 1);
+
+    const loadNextPage = () => {
+        const service = finbase();
+        if (!service || !fullApp() || !hasMore()) return;
+        void loadPage(service, spec(), page() + 1, false, serverFilter(), serverSort());
+    };
+
+    createEffect(() => {
+        const root = tableContainer();
+        const sentinel = loadMoreSentinel();
+        const canLoad = hasMore() && !loadingMore() && !loading();
+        if (!root || !sentinel || !canLoad) return;
+        const observer = new IntersectionObserver((entries) => {
+            if (entries.some(entry => entry.isIntersecting)) loadNextPage();
+        }, {root, rootMargin: "240px 0px"});
+        observer.observe(sentinel);
+        onCleanup(() => observer.disconnect());
     });
 
     const save = (payload: Record<string, unknown>) => {
@@ -427,7 +516,7 @@ export const DataPage: Component = () => {
             .then(() => {
                 toast.success(editing ? "Запись обновлена" : "Запись создана");
                 setModal(null);
-                load(service, coll);
+                reload();
             })
             .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
             .finally(() => setSaving(false));
@@ -444,7 +533,7 @@ export const DataPage: Component = () => {
             .then(() => {
                 toast.success("Запись удалена");
                 setModal(null);
-                load(service, coll);
+                reload();
             })
             .catch((e) => toast.error(e instanceof Error ? e.message : String(e)))
             .finally(() => setSaving(false));
@@ -476,65 +565,18 @@ export const DataPage: Component = () => {
         return result;
     });
 
-    const filteredRecords = createMemo(() => {
-        const needle = search().trim().toLocaleLowerCase("ru");
-        const filters = fieldFilters();
-        const date = dateField();
-        const labels = relationOptions();
-        const result = records().filter((record) => {
-            if (needle && !listableFields().some((field) =>
-                searchableValue(record, field, labels).toLocaleLowerCase("ru").includes(needle),
-            )) return false;
-
-            for (const [fieldName, expected] of Object.entries(filters)) {
-                if (!expected) continue;
-                const field = spec().fields.find((item) => item.name === fieldName);
-                const raw = record[fieldName];
-                if (expected === EMPTY_RELATION_FILTER) {
-                    if (Array.isArray(raw) ? raw.length > 0 : Boolean(raw)) return false;
-                    continue;
-                }
-                if (field?.kind === "relation-many") {
-                    if (!Array.isArray(raw) || !raw.map(String).includes(expected)) return false;
-                } else if (String(raw ?? "") !== expected) return false;
-            }
-
-            if (date) {
-                const value = toDateInput(record[date.name]);
-                if (fromDate() && value < fromDate()) return false;
-                if (toDate() && value > toDate()) return false;
-            }
-            const amount = Number(record.amount ?? 0);
-            if (amountKind() === "income" && amount <= 0) return false;
-            if (amountKind() === "expense" && amount >= 0) return false;
-            return true;
-        });
-
-        const sortState = sort();
-        const sortField = spec().fields.find((field) => field.name === sortState.field);
-        const direction = sortState.direction === "asc" ? 1 : -1;
-        return result.sort((a, b) => {
-            const left = sortField ? searchableValue(a, sortField, labels) : String(a[sortState.field] ?? "");
-            const right = sortField ? searchableValue(b, sortField, labels) : String(b[sortState.field] ?? "");
-            if (sortField?.kind === "number") {
-                return (Number(a[sortState.field] ?? 0) - Number(b[sortState.field] ?? 0)) * direction;
-            }
-            return left.localeCompare(right, "ru", {numeric: true}) * direction;
-        });
-    });
-
     const toggleSort = (field: string) => setSort((current) => ({
         field,
         direction: current.field === field && current.direction === "asc" ? "desc" : "asc",
     }));
 
-    const shownRecords = createMemo(() => filteredRecords().slice(0, DISPLAY_LIMIT));
     const hasActiveFilters = createMemo(() => Boolean(
         search() || fromDate() || toDate() || amountKind() || Object.values(fieldFilters()).some(Boolean),
     ));
 
     const resetFilters = () => {
         setSearch("");
+        setDebouncedSearch("");
         setFieldFilters({});
         setFromDate("");
         setToDate("");
@@ -631,7 +673,7 @@ export const DataPage: Component = () => {
                 </div>
             </Show>
 
-            <Show when={!loading() && records().length === 0}>
+            <Show when={!loading() && records().length === 0 && !hasActiveFilters()}>
                 <div class="empty-state">
                     <div class="empty-state__icon"><FaSolidDatabase/></div>
                     <div class="font-semibold text-slate-700">В коллекции пока пусто</div>
@@ -639,7 +681,7 @@ export const DataPage: Component = () => {
                 </div>
             </Show>
 
-            <Show when={!loading() && records().length > 0 && filteredRecords().length === 0}>
+            <Show when={!loading() && records().length === 0 && hasActiveFilters()}>
                 <div class="empty-state">
                     <Search size={26} class="text-slate-300"/>
                     <div class="font-semibold text-slate-700">Ничего не найдено</div>
@@ -647,14 +689,18 @@ export const DataPage: Component = () => {
                 </div>
             </Show>
 
-            <Show when={!loading() && filteredRecords().length > 0}>
+            <Show when={!loading() && records().length > 0}>
                 <div class="flex items-center justify-between text-xs text-slate-400">
-                    <span class="rounded-full bg-slate-100 px-2.5 py-1">Найдено: {filteredRecords().length} из {records().length}</span>
-                    <Show when={filteredRecords().length > DISPLAY_LIMIT}>
-                        <span> — показаны первые {DISPLAY_LIMIT}</span>
-                    </Show>
+                    <span class="rounded-full bg-slate-100 px-2.5 py-1">Загружено: {records().length} из {totalItems()}</span>
                 </div>
-                <div class="data-table-wrap screener-table-wrap">
+                <div
+                    ref={setTableContainer}
+                    class="data-table-wrap screener-table-wrap"
+                    onScroll={(event) => {
+                        const target = event.currentTarget;
+                        if (target.scrollHeight - target.scrollTop - target.clientHeight < 280) loadNextPage();
+                    }}
+                >
                     <table class="screener-table w-full text-xs">
                         <thead class="sticky top-0 z-20">
                         <tr class="bg-slate-50/80 text-slate-400 uppercase tracking-wide">
@@ -674,7 +720,7 @@ export const DataPage: Component = () => {
                         </tr>
                         </thead>
                         <tbody>
-                        <For each={shownRecords()}>
+                        <For each={records()}>
                             {(record) => (
                                 <tr class="group border-b border-slate-100 transition-colors hover:bg-blue-50/40">
                                     <For each={listableFields()}>
@@ -700,7 +746,7 @@ export const DataPage: Component = () => {
                                                     const service = finbase();
                                                     const collection = spec();
                                                     service?.deleteRecord(collection.collection, record.id)
-                                                        .then(() => load(service, collection))
+                                                        .then(() => reload())
                                                         .catch((e) => toast.error(e instanceof Error ? e.message : String(e)));
                                                 }
                                             }}
@@ -713,6 +759,17 @@ export const DataPage: Component = () => {
                         </For>
                         </tbody>
                     </table>
+                    <Show when={loadingMore() || hasMore()}>
+                        <div ref={setLoadMoreSentinel} class="flex min-h-12 items-center justify-center border-t border-slate-100 bg-white px-4 py-3">
+                            <Show when={loadingMore()} fallback={
+                                <button type="button" class="text-xs text-blue-600 hover:text-blue-700" onClick={loadNextPage}>
+                                    Загрузить ещё
+                                </button>
+                            }>
+                                <span class="flex items-center gap-2 text-xs text-slate-400"><FaSolidSpinner class="animate-spin text-blue-500"/> Загружаем следующую страницу…</span>
+                            </Show>
+                        </div>
+                    </Show>
                 </div>
             </Show>
 

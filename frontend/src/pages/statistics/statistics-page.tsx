@@ -120,6 +120,25 @@ const PALETTE = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899
 const WITHOUT_CATEGORY = "__without_category__";
 const WITHOUT_TAGS = "__without_tags__";
 const WITHOUT_OWNER = "__without_owner__";
+const WITHOUT_PROVIDER = "__without_provider__";
+const STATISTICS_LOAD_CONCURRENCY = 3;
+const UNCATEGORIZED_CATEGORY: CategoryRecord = {
+    id: WITHOUT_CATEGORY,
+    name: "Без категории",
+    color: "#94a3b8",
+    parent_category: "",
+    lucide_icon: "circle-help",
+};
+
+const PROVIDER_LABELS: Record<string, string> = {
+    tbank: "Т-Банк",
+    sber: "Сбер",
+    yandex: "Яндекс-Банк",
+};
+
+const providerLabel = (provider: string): string => PROVIDER_LABELS[provider]
+    ? `${PROVIDER_LABELS[provider]} · ${provider}`
+    : provider;
 
 interface QueryState {
     accounts: string[];
@@ -127,6 +146,7 @@ interface QueryState {
     categories: string[];
     tags: string[];
     owners: string[];
+    providers: string[];
     from: string;
     to: string;
 }
@@ -152,6 +172,7 @@ export const StatisticsPage: Component = () => {
             categories: (p.get("categories") ?? "").split(",").filter(Boolean),
             tags: (p.get("tags") ?? "").split(",").filter(Boolean),
             owners: (p.get("owners") ?? "").split(",").filter(Boolean),
+            providers: (p.get("providers") ?? "").split(",").filter(Boolean),
             from: p.get("from") ?? "",
             to: p.get("to") ?? "",
         };
@@ -170,6 +191,7 @@ export const StatisticsPage: Component = () => {
         if (patch.categories !== undefined) set("categories", patch.categories);
         if (patch.tags !== undefined) set("tags", patch.tags);
         if (patch.owners !== undefined) set("owners", patch.owners);
+        if (patch.providers !== undefined) set("providers", patch.providers);
         if (patch.from !== undefined) set("from", patch.from);
         if (patch.to !== undefined) set("to", patch.to);
         window.location.hash = `/${currentRoute()}${params.toString() ? `?${params}` : ""}`;
@@ -193,6 +215,8 @@ export const StatisticsPage: Component = () => {
     const [flows, setFlows] = createSignal<DailyFlowRecord[]>([]);
     const [splits, setSplits] = createSignal<FlowSplitRecord[]>([]);
     const [loading, setLoading] = createSignal(true);
+    const [accountsLoading, setAccountsLoading] = createSignal(true);
+    const [loadedAccountIds, setLoadedAccountIds] = createSignal<string[]>([]);
     const [error, setError] = createSignal("");
     const [detailSelection, setDetailSelection] = createSignal<DynamicsSelection | null>(null);
     const [detailBucket, setDetailBucket] = createSignal<DynamicsBucket>("week");
@@ -201,16 +225,27 @@ export const StatisticsPage: Component = () => {
     const [detailError, setDetailError] = createSignal("");
     let detailRequestId = 0;
 
-    // счета, прошедшие фильтр групп
+    // Счета, прошедшие фильтры типа, владельца и банка.
     const accountsByGroup = createMemo(() => {
         const q = query();
         const selectedOwners = q.owners.filter((id) => id !== WITHOUT_OWNER);
         const includeWithoutOwner = q.owners.includes(WITHOUT_OWNER);
+        const selectedProviders = q.providers.filter((id) => id !== WITHOUT_PROVIDER);
+        const includeWithoutProvider = q.providers.includes(WITHOUT_PROVIDER);
         return accounts().filter(a =>
             (q.groups.length === 0 || q.groups.includes(a.type))
-            && (q.owners.length === 0 || selectedOwners.includes(a.owner) || (includeWithoutOwner && !a.owner)),
+            && (q.owners.length === 0 || selectedOwners.includes(a.owner) || (includeWithoutOwner && !a.owner))
+            && (q.providers.length === 0
+                || selectedProviders.includes(a.provider_code)
+                || (includeWithoutProvider && !a.provider_code)),
         );
     });
+
+    const providerOptions = createMemo(() => [...new Set(accounts()
+        .map(account => account.provider_code)
+        .filter(Boolean))]
+        .sort((a, b) => providerLabel(a).localeCompare(providerLabel(b), "ru"))
+        .map(provider => ({id: provider, label: providerLabel(provider)})));
 
     const userById = createMemo(() => new Map(users().map((user) => [user.id, user])));
     const userName = (id: string): string => {
@@ -295,7 +330,8 @@ export const StatisticsPage: Component = () => {
             .then((list) => setAccounts(list
                 .filter(a => !a.excluded_report_at)
                 .sort((a, b) => a.name.localeCompare(b.name, "ru"))))
-            .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+            .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+            .finally(() => setAccountsLoading(false));
         service.getCategories().then(setCategories).catch(() => setCategories([]));
         service.getTags().then(setTags).catch(() => setTags([]));
         service.getUsers().then(setUsers).catch(() => setUsers([]));
@@ -305,24 +341,58 @@ export const StatisticsPage: Component = () => {
         const service = finbase();
         const ids = effectiveAccounts();
         if (!service || !standalone()) return;
+        if (accountsLoading()) return;
         if (ids.length === 0) {
             setFlows([]);
             setSplits([]);
+            setLoadedAccountIds([]);
             setLoading(false);
             return;
         }
         const from = fromDay();
         const to = toDay();
         let cancelled = false;
+        let nextAccount = 0;
+        let firstError = "";
+        setError("");
+        setFlows([]);
+        setSplits([]);
+        setLoadedAccountIds([]);
         setLoading(true);
-        Promise.all([service.getDailyFlows(ids), service.getFlowSplits(ids)])
-            .then(([flowList, splitList]) => {
+
+        const loadNextAccount = async () => {
+            while (!cancelled) {
+                const index = nextAccount++;
+                if (index >= ids.length) return;
+                const accountId = ids[index];
+                const [flowResult, splitResult] = await Promise.allSettled([
+                    service.getDailyFlows([accountId], from, to),
+                    service.getFlowSplits([accountId], from, to),
+                ]);
                 if (cancelled) return;
-                setFlows(flowList.filter(f => (!from || f.day >= from) && (!to || f.day <= to)));
-                setSplits(splitList.filter(s => (!from || s.day >= from) && (!to || s.day <= to)));
-            })
-            .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-            .finally(() => { if (!cancelled) setLoading(false); });
+                if (flowResult.status === "fulfilled") {
+                    setFlows(current => [...current, ...flowResult.value]);
+                } else if (!firstError) {
+                    firstError = flowResult.reason instanceof Error ? flowResult.reason.message : String(flowResult.reason);
+                }
+                if (splitResult.status === "fulfilled") {
+                    setSplits(current => [...current, ...splitResult.value]);
+                } else if (!firstError) {
+                    firstError = splitResult.reason instanceof Error ? splitResult.reason.message : String(splitResult.reason);
+                }
+                setLoadedAccountIds(current => [...current, accountId]);
+            }
+        };
+
+        const workers = Array.from(
+            {length: Math.min(STATISTICS_LOAD_CONCURRENCY, ids.length)},
+            () => loadNextAccount(),
+        );
+        void Promise.all(workers).finally(() => {
+            if (cancelled) return;
+            if (firstError) setError(firstError);
+            setLoading(false);
+        });
         return () => { cancelled = true; };
     });
 
@@ -542,32 +612,51 @@ export const StatisticsPage: Component = () => {
         return children;
     });
 
-    const doughnutItems = createMemo(() => {
+    const categoryBreakdown = createMemo(() => {
         const q = query();
         const level = drillLevel();
         const children = categoryTree().get(level ?? "");
         // на текущем уровне показываем: при активном фильтре — выбранные категории,
         // иначе — прямых детей текущего уровня (или верхнеуровневые на корне)
         const shown = q.categories.length && !level
-            ? q.categories.map(id => categoryMap().get(id)).filter((c): c is CategoryRecord => Boolean(c))
-            : children ?? [];
-        if (shown.length === 0) return [] as {cat: CategoryRecord; total: number}[];
+            ? q.categories
+                .map(id => id === WITHOUT_CATEGORY ? UNCATEGORIZED_CATEGORY : categoryMap().get(id))
+                .filter((c): c is CategoryRecord => Boolean(c))
+            : level
+                ? children ?? []
+                : [...(children ?? []), UNCATEGORIZED_CATEGORY];
+        if (shown.length === 0) return [] as {cat: CategoryRecord; income: number; expense: number}[];
 
         const shownIds = new Set(shown.map(c => c.id));
         const ancestors = categoryAncestors();
-        const byCat = new Map<string, number>();
+        const byCat = new Map<string, {income: number; expense: number}>();
         for (const s of filteredSplits()) {
-            if (!s.category) continue;
             // относим операцию к ближайшему показанному предку, чтобы суммы детей уходили в родителей
-            const own = shownIds.has(s.category) ? s.category : ancestors.get(s.category)?.find(a => shownIds.has(a));
+            const own = !s.category
+                ? (shownIds.has(WITHOUT_CATEGORY) ? WITHOUT_CATEGORY : undefined)
+                : shownIds.has(s.category) ? s.category : ancestors.get(s.category)?.find(a => shownIds.has(a));
             if (!own) continue;
-            byCat.set(own, (byCat.get(own) ?? 0) + s.delta);
+            const totals = byCat.get(own) ?? {income: 0, expense: 0};
+            if (s.delta >= 0) totals.income += s.delta;
+            else totals.expense += -s.delta;
+            byCat.set(own, totals);
         }
         return shown
-            .map(cat => ({cat, total: byCat.get(cat.id) ?? 0}))
-            .filter(x => x.total !== 0)
-            .sort((a, b) => b.total - a.total);
+            .map(cat => ({cat, ...(byCat.get(cat.id) ?? {income: 0, expense: 0})}))
+            .filter(item => item.income > 0 || item.expense > 0);
     });
+
+    const incomeDonutItems = createMemo(() => categoryBreakdown()
+        .filter(item => item.income > 0)
+        .sort((a, b) => b.income - a.income));
+    const expenseDonutItems = createMemo(() => categoryBreakdown()
+        .filter(item => item.expense > 0)
+        .sort((a, b) => b.expense - a.expense));
+    const categoryColor = (category: CategoryRecord): string => {
+        if (category.color) return category.color;
+        const index = categories().findIndex(item => item.id === category.id);
+        return PALETTE[Math.max(0, index) % PALETTE.length];
+    };
 
     const overallChartSeries = createMemo<BalanceSeries[]>(() => [{
         id: "total",
@@ -640,6 +729,15 @@ export const StatisticsPage: Component = () => {
                         selected={query().groups}
                         onChange={(ids) => updateQuery({groups: ids})}
                         placeholder="Группы счетов…"
+                    />
+                    <MultiSelect
+                        items={[
+                            {id: WITHOUT_PROVIDER, label: "Без провайдера", color: "#94a3b8"},
+                            ...providerOptions(),
+                        ]}
+                        selected={query().providers}
+                        onChange={(providers) => updateQuery({providers})}
+                        placeholder="Банки / провайдеры…"
                     />
                     <MultiSelect
                         items={[
@@ -716,12 +814,17 @@ export const StatisticsPage: Component = () => {
                     </div>
 
                     <Show when={loading()}>
-                        <div class="flex justify-center py-8 text-blue-500 text-2xl">
-                            <FaSolidSpinner class="animate-spin"/>
+                        <div class="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-700">
+                            <FaSolidSpinner class="animate-spin text-base"/>
+                            <span>
+                                {accountsLoading()
+                                    ? "Загружаем счета…"
+                                    : `Загружено счетов: ${loadedAccountIds().length} из ${effectiveAccounts().length}`}
+                            </span>
                         </div>
                     </Show>
 
-                    <Show when={!loading()}>
+                    <Show when={!accountsLoading()}>
                         <div class="summary-grid">
                             <div class="summary-card summary-card--balance">
                                 <span class="summary-card__icon"><FaSolidWallet/></span>
@@ -765,7 +868,7 @@ export const StatisticsPage: Component = () => {
                     </Show>
 
             {/* Общий баланс */}
-            <Show when={!loading() && overallPoints().length > 0}>
+            <Show when={overallPoints().length > 0}>
                 <Space>
                     <div class="flex items-baseline justify-between mb-1">
                         <h2 class="text-sm font-medium text-gray-500">Все средства</h2>
@@ -778,7 +881,7 @@ export const StatisticsPage: Component = () => {
             </Show>
 
             {/* Баланс по счетам */}
-            <Show when={!loading() && seriesByAccount().size > 0}>
+            <Show when={seriesByAccount().size > 0}>
                 <Space>
                     <div class="mb-1 flex items-center justify-between gap-3">
                         <h2 class="text-sm font-medium text-gray-500">Баланс по счетам</h2>
@@ -791,7 +894,7 @@ export const StatisticsPage: Component = () => {
             </Show>
 
             {/* Категории (круговая с drilldown) */}
-            <Show when={!loading() && doughnutItems().length > 0}>
+            <Show when={incomeDonutItems().length > 0 || expenseDonutItems().length > 0}>
                 <Space>
                     <div class="flex items-center justify-between mb-2">
                         <h2 class="text-sm font-medium text-gray-500">
@@ -806,42 +909,67 @@ export const StatisticsPage: Component = () => {
                             </button>
                         </Show>
                     </div>
-                    <div class="flex flex-col sm:flex-row gap-4">
-                        <div class="h-64 w-full sm:w-72">
-                            <CategoryDonut
-                                items={doughnutItems().map((item, index) => ({
-                                    id: item.cat.id,
-                                    name: item.cat.name,
-                                    color: item.cat.color || PALETTE[index % PALETTE.length],
-                                    value: item.total,
-                                }))}
-                                onSelect={(id) => { if (categoryTree().has(id)) setDrillLevel(id); }}
-                            />
+                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div class="category-donut-panel category-donut-panel--income min-w-0 rounded-2xl border border-emerald-100 bg-emerald-50/25 p-3">
+                            <div class="h-60 w-full">
+                                <CategoryDonut
+                                    title="Доходы"
+                                    items={incomeDonutItems().map(item => ({
+                                        id: item.cat.id,
+                                        name: item.cat.name,
+                                        color: categoryColor(item.cat),
+                                        value: item.income,
+                                    }))}
+                                    onSelect={(id) => { if (categoryTree().has(id)) setDrillLevel(id); }}
+                                />
+                            </div>
+                            <div class="flex max-h-48 flex-col gap-1 overflow-auto">
+                                <For each={incomeDonutItems()}>
+                                    {(item) => (
+                                        <button class="flex items-center gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-emerald-50" onClick={() => { if (categoryTree().has(item.cat.id)) setDrillLevel(item.cat.id); }}>
+                                            <span class="size-2.5 shrink-0 rounded-full" style={{background: categoryColor(item.cat)}}/>
+                                            <CategoryIcon name={item.cat.lucide_icon} class="text-slate-500"/>
+                                            <span class="min-w-0 flex-1 truncate text-gray-700">{item.cat.name}</span>
+                                            <Show when={categoryTree().has(item.cat.id)}><span class="text-gray-300">›</span></Show>
+                                            <span class="shrink-0 tabular-nums text-emerald-700">{fmtMoney(item.income)}</span>
+                                        </button>
+                                    )}
+                                </For>
+                            </div>
                         </div>
-                        <div class="flex-1 flex flex-col gap-1.5 min-w-0">
-                            <For each={doughnutItems()}>
-                                {(item) => (
-                                    <button
-                                        class="flex items-center gap-2 text-left text-xs hover:bg-gray-50 rounded px-1.5 py-1 cursor-pointer"
-                                        onClick={() => { if (categoryTree().has(item.cat.id)) setDrillLevel(item.cat.id); }}
-                                    >
-                                        <span class="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{background: item.cat.color || "#3b82f6"}}/>
-                                        <CategoryIcon name={item.cat.lucide_icon} class="text-slate-500"/>
-                                        <span class="truncate text-gray-700 flex-1">{item.cat.name}</span>
-                                        <Show when={categoryTree().has(item.cat.id)}>
-                                            <span class="text-gray-300">›</span>
-                                        </Show>
-                                        <span class="tabular-nums text-gray-600 shrink-0">{fmtMoney(item.total)}</span>
-                                    </button>
-                                )}
-                            </For>
+                        <div class="category-donut-panel category-donut-panel--expense min-w-0 rounded-2xl border border-rose-100 bg-rose-50/25 p-3">
+                            <div class="h-60 w-full">
+                                <CategoryDonut
+                                    title="Расходы"
+                                    items={expenseDonutItems().map(item => ({
+                                        id: item.cat.id,
+                                        name: item.cat.name,
+                                        color: categoryColor(item.cat),
+                                        value: item.expense,
+                                    }))}
+                                    onSelect={(id) => { if (categoryTree().has(id)) setDrillLevel(id); }}
+                                />
+                            </div>
+                            <div class="flex max-h-48 flex-col gap-1 overflow-auto">
+                                <For each={expenseDonutItems()}>
+                                    {(item) => (
+                                        <button class="flex items-center gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-rose-50" onClick={() => { if (categoryTree().has(item.cat.id)) setDrillLevel(item.cat.id); }}>
+                                            <span class="size-2.5 shrink-0 rounded-full" style={{background: categoryColor(item.cat)}}/>
+                                            <CategoryIcon name={item.cat.lucide_icon} class="text-slate-500"/>
+                                            <span class="min-w-0 flex-1 truncate text-gray-700">{item.cat.name}</span>
+                                            <Show when={categoryTree().has(item.cat.id)}><span class="text-gray-300">›</span></Show>
+                                            <span class="shrink-0 tabular-nums text-rose-700">{fmtMoney(item.expense)}</span>
+                                        </button>
+                                    )}
+                                </For>
+                            </div>
                         </div>
                     </div>
                 </Space>
             </Show>
 
             {/* Движение денег: счета → категории (санкей) */}
-            <Show when={!loading() && expenseTotal() > 0}>
+            <Show when={expenseTotal() > 0}>
                 <Space>
                     <h2 class="text-sm font-medium text-gray-500 mb-1">Движение денег</h2>
                     <Sankey accounts={accounts()} categories={categories()} splits={filteredSplits()}/>
@@ -849,7 +977,7 @@ export const StatisticsPage: Component = () => {
             </Show>
 
             {/* Динамика */}
-            <Show when={!loading() && dynamicsRows().length > 0}>
+            <Show when={dynamicsRows().length > 0}>
                 <Space>
                     <AccountDynamicsTable
                         periods={dynamicsPeriods()}

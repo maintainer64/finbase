@@ -34,6 +34,12 @@ type transactionRuleAction struct {
 	ValueRef   transactionRuleValueRef `json:"value_ref"`
 }
 
+const (
+	transferCategoryName  = "Переводы"
+	transferCategoryColor = "#64748b"
+	transferCategoryIcon  = "arrow-right-left"
+)
+
 func registerAutomation(app *pocketbase.PocketBase) {
 	// Владелец счёта определяется аутентифицированной PocketBase-сессией.
 	// Клиенту не нужно разбирать JWT или передавать пустой relation вручную.
@@ -109,7 +115,38 @@ func registerAutomation(app *pocketbase.PocketBase) {
 	app.OnRecordAfterCreateSuccess("transaction_rules").BindFunc(applyRuleToHistory)
 	app.OnRecordAfterUpdateSuccess("transaction_rules").BindFunc(applyRuleToHistory)
 
+	// Подтверждение пары делает обе операции системным переводом. Статус и
+	// категории сохраняются одной транзакцией БД, поэтому частично размеченной
+	// пары быть не может.
+	saveTransfer := func(e *core.RecordEvent) error {
+		if e.Record.GetString("status") != "accepted" {
+			return e.Next()
+		}
+		apply := func() error {
+			if err := categorizeAcceptedTransfer(e.App, e.Record); err != nil {
+				return fmt.Errorf("categorize accepted transfer: %w", err)
+			}
+			return e.Next()
+		}
+		if e.App.IsTransactional() {
+			return apply()
+		}
+		originalApp := e.App
+		return originalApp.RunInTransaction(func(txApp core.App) error {
+			e.App = txApp
+			defer func() { e.App = originalApp }()
+			return apply()
+		})
+	}
+	app.OnRecordCreate("transfers").BindFunc(saveTransfer)
+	app.OnRecordUpdate("transfers").BindFunc(saveTransfer)
+
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		// Заодно доводим до нового инварианта переводы, подтверждённые до
+		// появления системной категории.
+		if err := categorizeExistingAcceptedTransfers(e.App); err != nil {
+			return fmt.Errorf("categorize existing Finbase transfers: %w", err)
+		}
 		if err := configureReportingTimezone(e.App); err != nil {
 			return fmt.Errorf("configure Finbase reporting timezone: %w", err)
 		}
@@ -118,6 +155,70 @@ func registerAutomation(app *pocketbase.PocketBase) {
 		}
 		return e.Next()
 	})
+}
+
+func ensureTransferCategory(app core.App) (*core.Record, error) {
+	category, err := app.FindFirstRecordByData("categories", "name", transferCategoryName)
+	if err == nil {
+		return category, nil
+	}
+	collection, collectionErr := app.FindCollectionByNameOrId("categories")
+	if collectionErr != nil {
+		return nil, collectionErr
+	}
+	category = core.NewRecord(collection)
+	category.Set("name", transferCategoryName)
+	category.Set("color", transferCategoryColor)
+	category.Set("lucide_icon", transferCategoryIcon)
+	if saveErr := app.Save(category); saveErr != nil {
+		// Другой параллельный запрос мог создать уникальную категорию первым.
+		if existing, findErr := app.FindFirstRecordByData("categories", "name", transferCategoryName); findErr == nil {
+			return existing, nil
+		}
+		return nil, saveErr
+	}
+	return category, nil
+}
+
+func categorizeAcceptedTransfer(app core.App, transfer *core.Record) error {
+	if transfer.GetString("status") != "accepted" {
+		return nil
+	}
+	category, err := ensureTransferCategory(app)
+	if err != nil {
+		return err
+	}
+	ids := []string{transfer.GetString("inflow_transaction"), transfer.GetString("outflow_transaction")}
+	if ids[0] == "" || ids[1] == "" || ids[0] == ids[1] {
+		return errors.New("accepted transfer must reference two different transactions")
+	}
+	for _, id := range ids {
+		transaction, findErr := app.FindRecordById("transactions", id)
+		if findErr != nil {
+			return findErr
+		}
+		if transaction.GetString("category") == category.Id {
+			continue
+		}
+		transaction.Set("category", category.Id)
+		if saveErr := app.Save(transaction); saveErr != nil {
+			return saveErr
+		}
+	}
+	return nil
+}
+
+func categorizeExistingAcceptedTransfers(app core.App) error {
+	transfers, err := app.FindRecordsByFilter("transfers", "status = 'accepted'", "created", 0, 0)
+	if err != nil {
+		return err
+	}
+	for _, transfer := range transfers {
+		if err := categorizeAcceptedTransfer(app, transfer); err != nil {
+			return fmt.Errorf("transfer %s: %w", transfer.Id, err)
+		}
+	}
+	return nil
 }
 
 func transferWindow() time.Duration {
@@ -311,7 +412,7 @@ func applyRuleActions(app core.App, rule, transaction *core.Record) (bool, error
 }
 
 func applyFirstMatchingRule(app core.App, transaction *core.Record) (bool, error) {
-	if transaction.GetString("category") != "" {
+	if transaction.GetString("category") != "" || transactionHasAcceptedTransfer(app, transaction.Id) {
 		return false, nil
 	}
 	rules, err := app.FindRecordsByFilter("transaction_rules", "active = true && resource_type = 'transaction'", "name", 0, 0)
@@ -343,6 +444,9 @@ func applyRuleToExistingTransactions(app core.App, rule *core.Record) error {
 		return err
 	}
 	for _, transaction := range transactions {
+		if transactionHasAcceptedTransfer(app, transaction.Id) {
+			continue
+		}
 		matches, err := ruleMatches(app, rule, transaction)
 		if err != nil {
 			return err
@@ -361,6 +465,18 @@ func applyRuleToExistingTransactions(app core.App, rule *core.Record) error {
 		}
 	}
 	return nil
+}
+
+func transactionHasAcceptedTransfer(app core.App, transactionID string) bool {
+	if transactionID == "" {
+		return false
+	}
+	_, err := app.FindFirstRecordByFilter(
+		"transfers",
+		"status = 'accepted' && (inflow_transaction = {:id} || outflow_transaction = {:id})",
+		dbx.Params{"id": transactionID},
+	)
+	return err == nil
 }
 
 func transactionHasActiveTransfer(app core.App, transactionID string) bool {

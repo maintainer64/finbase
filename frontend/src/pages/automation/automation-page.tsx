@@ -41,6 +41,8 @@ type RuleDraft = {
     active: boolean;
 };
 
+type AutomationTab = "transfers" | "groups" | "rules";
+
 const emptyDraft = (): RuleDraft => ({
     name: "",
     match: "",
@@ -229,10 +231,12 @@ export const AutomationPage: Component = () => {
     const [pendingPage, setPendingPage] = createSignal<PageState>(emptyPage());
     const [historyPage, setHistoryPage] = createSignal<PageState>(emptyPage());
     const [groupCategories, setGroupCategories] = createSignal<Record<string, string>>({});
+    const [rulesInitialized, setRulesInitialized] = createSignal(false);
     const [loading, setLoading] = createSignal(true);
     const [error, setError] = createSignal("");
     const [saving, setSaving] = createSignal(false);
     const [dialog, setDialog] = createSignal<RuleDraft | null>(null);
+    const [activeTab, setActiveTab] = createSignal<AutomationTab>("transfers");
 
     const accountById = createMemo(() => new Map(accounts().map((item) => [item.id, item])));
     const userById = createMemo(() => new Map(users().map((item) => [item.id, item])));
@@ -260,7 +264,7 @@ export const AutomationPage: Component = () => {
         });
     };
 
-    const load = async () => {
+    const load = async (tab: AutomationTab = activeTab()) => {
         const api = service();
         if (!api || !standalone()) {
             setLoading(false);
@@ -269,32 +273,52 @@ export const AutomationPage: Component = () => {
         setLoading(true);
         setError("");
         const requestId = ++loadRequestId;
-        setGroups([]);
-        setPendingTransfers([]);
-        setTransferHistory([]);
-        setTransactions([]);
-        setGroupsPage(emptyPage());
-        setPendingPage(emptyPage());
-        setHistoryPage(emptyPage());
+        if (tab === "groups") {
+            setGroups([]);
+            setGroupsPage(emptyPage());
+        } else if (tab === "transfers") {
+            setPendingTransfers([]);
+            setTransferHistory([]);
+            setTransactions([]);
+            setPendingPage(emptyPage());
+            setHistoryPage(emptyPage());
+        } else {
+            setRules([]);
+            setRulesInitialized(false);
+        }
         try {
-            const [accountList, userList, categoryList, ruleList, groupResult, pendingResult] = await Promise.all([
+            const metadataPromise = Promise.all([
                 api.getAccountsList(),
                 api.getUsers(),
                 api.getCategories(),
-                api.getTransactionRules(),
-                api.getOperationGroupsPage(1, PAGE_SIZE),
-                api.getTransfersPage(1, PAGE_SIZE, "pending"),
+            ]);
+            const tabPromise = tab === "groups"
+                ? api.getOperationGroupsPage(1, PAGE_SIZE)
+                : tab === "transfers"
+                    ? api.getTransfersPage(1, PAGE_SIZE, "pending")
+                    : api.getTransactionRules();
+            const [[accountList, userList, categoryList], tabResult] = await Promise.all([
+                metadataPromise,
+                tabPromise,
             ]);
             if (requestId !== loadRequestId) return;
             setAccounts(accountList);
             setUsers(userList);
             setCategories(categoryList.sort((a, b) => a.name.localeCompare(b.name, "ru")));
-            setRules(ruleList.sort((a, b) => a.name.localeCompare(b.name, "ru")));
-            setGroups(groupResult.items);
-            setGroupsPage(loadedPage(groupResult));
-            setPendingTransfers(pendingResult.items);
-            setPendingPage(loadedPage(pendingResult));
-            await addTransactionDetails(api, pendingResult.items);
+            if (tab === "groups") {
+                const result = tabResult as Awaited<ReturnType<FinbaseService["getOperationGroupsPage"]>>;
+                setGroups(result.items);
+                setGroupsPage(loadedPage(result));
+            } else if (tab === "transfers") {
+                const result = tabResult as Awaited<ReturnType<FinbaseService["getTransfersPage"]>>;
+                setPendingTransfers(result.items);
+                setPendingPage(loadedPage(result));
+                await addTransactionDetails(api, result.items);
+            } else {
+                const result = tabResult as TransactionRuleRecord[];
+                setRules(result.sort((a, b) => a.name.localeCompare(b.name, "ru")));
+                setRulesInitialized(true);
+            }
         } catch (reason) {
             if (requestId === loadRequestId) setError(reason instanceof Error ? reason.message : String(reason));
         } finally {
@@ -339,7 +363,8 @@ export const AutomationPage: Component = () => {
         finbaseUrl();
         finbaseToken();
         standalone();
-        void load();
+        const tab = activeTab();
+        void load(tab);
     });
 
     const draftFromRule = (rule: TransactionRuleRecord): RuleDraft => {
@@ -484,7 +509,7 @@ export const AutomationPage: Component = () => {
                         <p class="mt-1 text-sm text-slate-500">Баланс счетов считается автоматически по операциям.</p>
                     </div>
                     <div class="flex gap-2">
-                        <button class="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 shadow-sm hover:bg-slate-50" disabled={loading()} onClick={load}>
+                        <button class="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 shadow-sm hover:bg-slate-50" disabled={loading()} onClick={() => void load(activeTab())}>
                             <RefreshCw size={16} class={loading() ? "animate-spin" : ""}/> Обновить
                         </button>
                         <button class="flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800" onClick={() => setDialog(emptyDraft())}>
@@ -504,9 +529,9 @@ export const AutomationPage: Component = () => {
                 }>
                     <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                         <For each={[
-                            {label: "Активные правила", value: rules().filter((item) => item.active).length, icon: WandSparkles, tone: "text-blue-600 bg-blue-50"},
-                            {label: "Группы без категории", value: groupsPage().totalItems, icon: Layers3, tone: "text-violet-600 bg-violet-50"},
-                            {label: "Ждут проверки", value: pendingPage().totalItems, icon: Scale, tone: "text-amber-600 bg-amber-50"},
+                            {label: "Активные правила", value: rulesInitialized() ? rules().filter((item) => item.active).length : "—", icon: WandSparkles, tone: "text-blue-600 bg-blue-50"},
+                            {label: "Группы без категории", value: groupsPage().initialized ? groupsPage().totalItems : "—", icon: Layers3, tone: "text-violet-600 bg-violet-50"},
+                            {label: "Ждут проверки", value: pendingPage().initialized ? pendingPage().totalItems : "—", icon: Scale, tone: "text-amber-600 bg-amber-50"},
                             {label: "Счетов в балансе", value: accounts().length, icon: CircleDollarSign, tone: "text-emerald-600 bg-emerald-50"},
                         ]}>{(item) => (
                             <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
@@ -518,7 +543,34 @@ export const AutomationPage: Component = () => {
                     </div>
                 </Show>
 
+                <nav class="flex w-full gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-100/80 p-1" role="tablist" aria-label="Разделы автоматики">
+                    <For each={[
+                        {id: "transfers" as const, label: "Переводы", count: pendingPage().initialized ? pendingPage().totalItems : null, icon: Scale},
+                        {id: "groups" as const, label: "Группы операций", count: groupsPage().initialized ? groupsPage().totalItems : null, icon: Layers3},
+                        {id: "rules" as const, label: "Созданные правила", count: rulesInitialized() ? rules().length : null, icon: WandSparkles},
+                    ]}>{(tab) => (
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={activeTab() === tab.id}
+                            class={`flex min-w-fit flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
+                                activeTab() === tab.id
+                                    ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200/80"
+                                    : "text-slate-500 hover:bg-white/60 hover:text-slate-800"
+                            }`}
+                            onClick={() => setActiveTab(tab.id)}
+                        >
+                            <tab.icon size={16}/>
+                            <span>{tab.label}</span>
+                            <Show when={tab.count !== null}>
+                                <span class={`rounded-full px-2 py-0.5 text-[11px] ${activeTab() === tab.id ? "bg-blue-50 text-blue-600" : "bg-slate-200/70 text-slate-500"}`}>{tab.count}</span>
+                            </Show>
+                        </button>
+                    )}</For>
+                </nav>
+
                 <Show when={!loading()} fallback={<AutomationSkeleton/>}>
+                    <Show when={activeTab() === "groups"}>
                     <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                         <div class="border-b border-slate-100 px-5 py-4">
                             <h2 class="font-semibold text-slate-900">Похожие операции без категории</h2>
@@ -551,7 +603,9 @@ export const AutomationPage: Component = () => {
                             />
                         </Show>
                     </section>
+                    </Show>
 
+                    <Show when={activeTab() === "transfers"}>
                     <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                         <div class="border-b border-slate-100 px-5 py-4">
                             <h2 class="font-semibold text-slate-900">Переводы на проверке</h2>
@@ -581,7 +635,9 @@ export const AutomationPage: Component = () => {
                             />
                         </Show>
                     </section>
+                    </Show>
 
+                    <Show when={activeTab() === "rules"}>
                     <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                         <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
                             <div>
@@ -619,7 +675,9 @@ export const AutomationPage: Component = () => {
                             </div>
                         </Show>
                     </section>
+                    </Show>
 
+                    <Show when={activeTab() === "transfers"}>
                     <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                         <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
                             <h2 class="font-semibold text-slate-900">История проверки переводов</h2>
@@ -650,6 +708,7 @@ export const AutomationPage: Component = () => {
                             onLoad={() => void loadMoreTransfers("history")}
                         />
                     </section>
+                    </Show>
                 </Show>
             </div>
 

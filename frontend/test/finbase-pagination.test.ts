@@ -1,5 +1,7 @@
 import {afterEach, describe, expect, it, vi} from "vitest";
 import {FinbaseService} from "@/shared/providers/services/finbase/finbase-service";
+import {buildDataFilter} from "@/pages/data/data-filter";
+import {COLLECTIONS} from "@/pages/data/finbase-schema";
 
 const token = "aaa.bbb.ccc";
 
@@ -43,6 +45,43 @@ describe("пагинация Finbase", () => {
         expect(fetchMock).toHaveBeenCalledTimes(3);
         const perPages = fetchMock.mock.calls.map(call => new URL(String(call[0])).searchParams.get("perPage"));
         expect(perPages).toEqual(["40", "40", "5"]);
+    });
+
+    it("передаёт период на сервер при загрузке статистики счёта", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
+            page: 1,
+            perPage: 200,
+            totalItems: 0,
+            totalPages: 0,
+            items: [],
+        }), {status: 200, headers: {"Content-Type": "application/json"}}));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const service = new FinbaseService("https://finbase.example", token);
+        await service.getDailyFlows(["account-1"], "2026-08-01", "2026-08-31");
+
+        const url = new URL(String(fetchMock.mock.calls[0][0]));
+        expect(url.searchParams.get("filter")).toBe(
+            'account = "account-1" && day >= "2026-08-01" && day <= "2026-08-31"',
+        );
+    });
+});
+
+describe("серверные фильтры таблицы данных", () => {
+    it("собирает поиск, пустые связи, период и направление операции", () => {
+        const transactions = COLLECTIONS.find(item => item.collection === "transactions")!;
+        expect(buildDataFilter(
+            transactions,
+            "кофе",
+            {category: "__empty_relation__", tags: "__empty_relation__"},
+            "2026-08-01",
+            "2026-08-31",
+            "expense",
+        )).toBe(
+            '(note ~ "кофе") && category = "" && tags:length = 0'
+            + ' && date >= "2026-08-01T00:00:00.000Z"'
+            + ' && date < "2026-09-01T00:00:00.000Z" && amount < 0',
+        );
     });
 });
 
