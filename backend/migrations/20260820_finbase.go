@@ -295,12 +295,26 @@ func upgradeExistingSchema(app core.App, authRule *string) error {
 		return err
 	}
 
+	accounts, err := app.FindCollectionByNameOrId("accounts")
+	if err != nil {
+		return err
+	}
+	if externalID, ok := accounts.Fields.GetByName("external_id").(*core.TextField); ok {
+		externalID.Max = 0
+	}
+	if err := app.Save(accounts); err != nil {
+		return err
+	}
+
 	transactions, err := app.FindCollectionByNameOrId("transactions")
 	if err != nil {
 		return err
 	}
 	if amount, ok := transactions.Fields.GetByName("amount").(*core.NumberField); ok {
 		amount.Required = false
+	}
+	if externalID, ok := transactions.Fields.GetByName("external_id").(*core.TextField); ok {
+		externalID.Max = 0
 	}
 	transactions.RemoveIndex("idx_transactions_account_date")
 	transactions.AddIndex("idx_transactions_account_date", false, "account, date", "")
@@ -360,7 +374,7 @@ func init() {
 			&core.NumberField{Name: "balance"},
 			&core.RelationField{Name: "owner", Required: true, MaxSelect: 1, CollectionId: users.Id},
 			&core.TextField{Name: "currency", Required: true, Max: 3},
-			&core.TextField{Name: "external_id", Max: 200},
+			&core.TextField{Name: "external_id"},
 			&core.TextField{Name: "provider_code", Max: 50},
 			&core.TextField{Name: "accountable_type", Max: 100},
 			&core.TextField{Name: "accountable_id", Max: 100},
@@ -423,7 +437,7 @@ func init() {
 			&core.NumberField{Name: "amount"},
 			&core.TextField{Name: "currency", Required: true, Max: 3},
 			&core.TextField{Name: "note", Max: 1000},
-			&core.TextField{Name: "external_id", Max: 200},
+			&core.TextField{Name: "external_id"},
 		)
 		transactions.AddIndex("idx_transactions_account", false, "account", "")
 		transactions.AddIndex("idx_transactions_category", false, "category", "")
@@ -489,7 +503,7 @@ func init() {
 		// When this migration upgraded a database created by the old chain, a
 		// rollback must not remove the user's base collections.
 		var legacyMigrations int
-		if err := app.DB().NewQuery("SELECT count(*) FROM _migrations WHERE file IN ('0001_initial.go', '20260820_finbase_v2.go', '20260820_finbase_v3.go')").Row(&legacyMigrations); err == nil && legacyMigrations > 0 {
+		if err := app.DB().NewQuery("SELECT count(*) FROM _migrations WHERE file IN ('0001_initial.go', '20260820_finbase_v2.go', '20260820_finbase_v3.go', '20260821_finbase_v4.go')").Row(&legacyMigrations); err == nil && legacyMigrations > 0 {
 			return nil
 		}
 		for _, name := range []string{"operation_groups", "flow_splits", "category_sums", "daily_flows", "transaction_rules", "transfers", "transactions", "tags", "categories", "accounts"} {
@@ -501,5 +515,5 @@ func init() {
 			}
 		}
 		return nil
-	}, "20260821_finbase_v4.go")
+	}, "20260821_finbase_v5.go")
 }
