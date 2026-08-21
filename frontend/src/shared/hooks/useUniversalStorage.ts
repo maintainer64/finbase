@@ -1,4 +1,4 @@
-import {createEffect, createSignal} from 'solid-js';
+import {createSignal} from 'solid-js';
 
 
 export function useUniversalStorage<T>(
@@ -30,9 +30,9 @@ export function useUniversalStorage<T>(
     const [error, setError] = createSignal<string>(loadError);
     const [isInitialStateResolved] = createSignal<boolean>(true);
 
-    createEffect(() => {
+    const persist = (next: T) => {
         try {
-            const serialized = serialize(value());
+            const serialized = serialize(next);
             localStorage.setItem(key, serialized);
             setError('');
             setIsPersistent(true);
@@ -40,15 +40,16 @@ export function useUniversalStorage<T>(
             setError(err instanceof Error ? err.message : 'Unknown error');
             setIsPersistent(false);
         }
-    });
+    };
 
     const updateValue = (newValue: T | ((prev: T) => T)) => {
-        if (typeof newValue === 'function') {
-            setValue(prev => (newValue as (prev: T) => T)(prev));
-        } else {
-            // @ts-expect-error new value
-            setValue(newValue);
-        }
+        const next = typeof newValue === 'function'
+            ? (newValue as (prev: T) => T)(value())
+            : newValue;
+        // Пишем сразу, а не через createEffect: store кэшируется между экранами,
+        // тогда как владелец первого Solid-компонента может быть уже уничтожен.
+        persist(next);
+        setValue(() => next);
     };
 
     return [value, updateValue, isPersistent, error, isInitialStateResolved];

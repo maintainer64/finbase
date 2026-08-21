@@ -1,4 +1,4 @@
-import {Component, createEffect, createMemo, createSignal, For, Show, untrack} from "solid-js";
+import {Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack} from "solid-js";
 import {toast} from "solid-toast";
 import {
     ArrowDownLeft,
@@ -61,6 +61,62 @@ const formatDate = (value?: string, withTime = false): string => {
     if (Number.isNaN(parsed.getTime())) return value;
     return (withTime ? dateTime : shortDate).format(parsed);
 };
+
+const PAGE_SIZE = 20;
+
+interface PageState {
+    page: number;
+    totalPages: number;
+    totalItems: number;
+    loading: boolean;
+    initialized: boolean;
+}
+
+const emptyPage = (): PageState => ({page: 0, totalPages: 1, totalItems: 0, loading: false, initialized: false});
+const loadedPage = (result: {page: number; totalPages: number; totalItems: number}): PageState => ({
+    page: result.page,
+    totalPages: result.totalPages,
+    totalItems: result.totalItems,
+    loading: false,
+    initialized: true,
+});
+
+const LoadMoreSentinel: Component<{
+    hasMore: boolean;
+    loading: boolean;
+    onLoad: () => void;
+}> = (props) => {
+    let anchor: HTMLDivElement | undefined;
+    onMount(() => {
+        if (!anchor) return;
+        const observer = new IntersectionObserver((entries) => {
+            if (entries.some(entry => entry.isIntersecting) && props.hasMore && !props.loading) props.onLoad();
+        }, {rootMargin: "240px"});
+        observer.observe(anchor);
+        onCleanup(() => observer.disconnect());
+    });
+    return (
+        <div ref={(element) => { anchor = element; }} class={props.hasMore || props.loading ? "flex justify-center px-5 py-4" : "hidden"}>
+            <Show when={props.loading} fallback={<span class="text-xs text-slate-400">Прокрутите ниже, чтобы загрузить ещё</span>}>
+                <FaSolidSpinner class="animate-spin text-blue-500"/>
+            </Show>
+        </div>
+    );
+};
+
+const AutomationSkeleton: Component = () => (
+    <div class="space-y-6 animate-pulse">
+        <For each={[0, 1, 2]}>{() => (
+            <div class="overflow-hidden rounded-3xl border border-slate-200 bg-white">
+                <div class="h-16 border-b border-slate-100 bg-slate-50"/>
+                <div class="space-y-3 p-5">
+                    <div class="h-14 rounded-xl bg-slate-100"/>
+                    <div class="h-14 rounded-xl bg-slate-100"/>
+                </div>
+            </div>
+        )}</For>
+    </div>
+);
 
 const transactionType = (rule: TransactionRuleRecord): "income" | "expense" => {
     const condition = rule.conditions?.find((item) => ["transaction_type", "type"].includes(item.condition_type));
@@ -166,8 +222,12 @@ export const AutomationPage: Component = () => {
     const [categories, setCategories] = createSignal<CategoryRecord[]>([]);
     const [rules, setRules] = createSignal<TransactionRuleRecord[]>([]);
     const [groups, setGroups] = createSignal<OperationGroupRecord[]>([]);
-    const [transfers, setTransfers] = createSignal<TransferRecord[]>([]);
+    const [pendingTransfers, setPendingTransfers] = createSignal<TransferRecord[]>([]);
+    const [transferHistory, setTransferHistory] = createSignal<TransferRecord[]>([]);
     const [transactions, setTransactions] = createSignal<TransactionRecord[]>([]);
+    const [groupsPage, setGroupsPage] = createSignal<PageState>(emptyPage());
+    const [pendingPage, setPendingPage] = createSignal<PageState>(emptyPage());
+    const [historyPage, setHistoryPage] = createSignal<PageState>(emptyPage());
     const [groupCategories, setGroupCategories] = createSignal<Record<string, string>>({});
     const [loading, setLoading] = createSignal(true);
     const [error, setError] = createSignal("");
@@ -184,10 +244,21 @@ export const AutomationPage: Component = () => {
     };
     const categoryById = createMemo(() => new Map(categories().map((item) => [item.id, item])));
     const transactionById = createMemo(() => new Map(transactions().map((item) => [item.id, item])));
-    const pendingTransfers = createMemo(() => transfers().filter((item) => item.status === "pending"));
-    const transferHistory = createMemo(() => transfers()
-        .filter((item) => item.status !== "pending")
-        .sort((a, b) => String(b.updated || b.created).localeCompare(String(a.updated || a.created))));
+    let loadRequestId = 0;
+
+    const addTransactionDetails = async (api: FinbaseService, transferList: TransferRecord[]) => {
+        const known = new Set(transactions().map(item => item.id));
+        const ids = [...new Set(transferList
+            .flatMap(item => [item.inflow_transaction, item.outflow_transaction])
+            .filter(id => id && !known.has(id)))];
+        if (!ids.length) return;
+        const details = await api.getTransactionsByIds(ids);
+        setTransactions(current => {
+            const byId = new Map(current.map(item => [item.id, item]));
+            for (const item of details) byId.set(item.id, item);
+            return [...byId.values()];
+        });
+    };
 
     const load = async () => {
         const api = service();
@@ -197,24 +268,70 @@ export const AutomationPage: Component = () => {
         }
         setLoading(true);
         setError("");
+        const requestId = ++loadRequestId;
+        setGroups([]);
+        setPendingTransfers([]);
+        setTransferHistory([]);
+        setTransactions([]);
+        setGroupsPage(emptyPage());
+        setPendingPage(emptyPage());
+        setHistoryPage(emptyPage());
         try {
-            const [accountList, userList, categoryList, ruleList, groupList, transferList] = await Promise.all([
-                api.getAccountsList(), api.getUsers(), api.getCategories(), api.getTransactionRules(), api.getOperationGroups(), api.getTransfers(),
+            const [accountList, userList, categoryList, ruleList, groupResult, pendingResult] = await Promise.all([
+                api.getAccountsList(),
+                api.getUsers(),
+                api.getCategories(),
+                api.getTransactionRules(),
+                api.getOperationGroupsPage(1, PAGE_SIZE),
+                api.getTransfersPage(1, PAGE_SIZE, "pending"),
             ]);
+            if (requestId !== loadRequestId) return;
             setAccounts(accountList);
             setUsers(userList);
             setCategories(categoryList.sort((a, b) => a.name.localeCompare(b.name, "ru")));
             setRules(ruleList.sort((a, b) => a.name.localeCompare(b.name, "ru")));
-            setGroups(groupList.sort((a, b) => b.transactions_count - a.transactions_count));
-            setTransfers(transferList);
-            const ids = [...new Set(transferList.flatMap((item) => [item.inflow_transaction, item.outflow_transaction]).filter(Boolean))];
-            setTransactions(ids.length
-                ? await api.getTransactions(ids.map((id) => `id = ${JSON.stringify(id)}`).join(" || "))
-                : []);
+            setGroups(groupResult.items);
+            setGroupsPage(loadedPage(groupResult));
+            setPendingTransfers(pendingResult.items);
+            setPendingPage(loadedPage(pendingResult));
+            await addTransactionDetails(api, pendingResult.items);
         } catch (reason) {
-            setError(reason instanceof Error ? reason.message : String(reason));
+            if (requestId === loadRequestId) setError(reason instanceof Error ? reason.message : String(reason));
         } finally {
-            setLoading(false);
+            if (requestId === loadRequestId) setLoading(false);
+        }
+    };
+
+    const loadMoreGroups = async () => {
+        const api = service();
+        const state = groupsPage();
+        if (!api || state.loading || state.page >= state.totalPages) return;
+        setGroupsPage(current => ({...current, loading: true}));
+        try {
+            const result = await api.getOperationGroupsPage(state.page + 1, PAGE_SIZE);
+            setGroups(current => [...current, ...result.items]);
+            setGroupsPage(loadedPage(result));
+        } catch (reason) {
+            setGroupsPage(current => ({...current, loading: false}));
+            setError(reason instanceof Error ? reason.message : String(reason));
+        }
+    };
+
+    const loadMoreTransfers = async (kind: "pending" | "history") => {
+        const api = service();
+        const state = kind === "pending" ? pendingPage() : historyPage();
+        if (!api || state.loading || state.page >= state.totalPages) return;
+        const setPage = kind === "pending" ? setPendingPage : setHistoryPage;
+        setPage(current => ({...current, loading: true}));
+        try {
+            const result = await api.getTransfersPage(state.page + 1, PAGE_SIZE, kind);
+            if (kind === "pending") setPendingTransfers(current => [...current, ...result.items]);
+            else setTransferHistory(current => [...current, ...result.items]);
+            setPage(loadedPage(result));
+            await addTransactionDetails(api, result.items);
+        } catch (reason) {
+            setPage(current => ({...current, loading: false}));
+            setError(reason instanceof Error ? reason.message : String(reason));
         }
     };
 
@@ -319,9 +436,14 @@ export const AutomationPage: Component = () => {
         const api = service();
         if (!api) return;
         try {
-            await api.updateRecord("transfers", transfer.id, {status});
+            const updated = await api.updateRecord("transfers", transfer.id, {status});
             toast.success(status === "accepted" ? "Перевод подтверждён" : "Совпадение отклонено");
-            await load();
+            setPendingTransfers(current => current.filter(item => item.id !== transfer.id));
+            setPendingPage(current => ({...current, totalItems: Math.max(0, current.totalItems - 1)}));
+            if (historyPage().initialized) {
+                setTransferHistory(current => [updated, ...current.filter(item => item.id !== updated.id)]);
+                setHistoryPage(current => ({...current, totalItems: current.totalItems + 1}));
+            }
         } catch (reason) {
             toast.error(`Не удалось изменить перевод: ${String(reason)}`);
         }
@@ -375,22 +497,28 @@ export const AutomationPage: Component = () => {
                     <div class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error()}</div>
                 </Show>
 
-                <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <For each={[
-                        {label: "Активные правила", value: rules().filter((item) => item.active).length, icon: WandSparkles, tone: "text-blue-600 bg-blue-50"},
-                        {label: "Группы без категории", value: groups().length, icon: Layers3, tone: "text-violet-600 bg-violet-50"},
-                        {label: "Ждут проверки", value: pendingTransfers().length, icon: Scale, tone: "text-amber-600 bg-amber-50"},
-                        {label: "Счетов в балансе", value: accounts().length, icon: CircleDollarSign, tone: "text-emerald-600 bg-emerald-50"},
-                    ]}>{(item) => (
-                        <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
-                            <div class={`mb-3 flex size-9 items-center justify-center rounded-xl ${item.tone}`}><item.icon size={18}/></div>
-                            <div class="text-2xl font-semibold text-slate-900">{item.value}</div>
-                            <div class="text-xs text-slate-500">{item.label}</div>
-                        </div>
-                    )}</For>
-                </div>
+                <Show when={!loading()} fallback={
+                    <div class="grid animate-pulse gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <For each={[0, 1, 2, 3]}>{() => <div class="h-28 rounded-2xl bg-slate-100"/>}</For>
+                    </div>
+                }>
+                    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <For each={[
+                            {label: "Активные правила", value: rules().filter((item) => item.active).length, icon: WandSparkles, tone: "text-blue-600 bg-blue-50"},
+                            {label: "Группы без категории", value: groupsPage().totalItems, icon: Layers3, tone: "text-violet-600 bg-violet-50"},
+                            {label: "Ждут проверки", value: pendingPage().totalItems, icon: Scale, tone: "text-amber-600 bg-amber-50"},
+                            {label: "Счетов в балансе", value: accounts().length, icon: CircleDollarSign, tone: "text-emerald-600 bg-emerald-50"},
+                        ]}>{(item) => (
+                            <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
+                                <div class={`mb-3 flex size-9 items-center justify-center rounded-xl ${item.tone}`}><item.icon size={18}/></div>
+                                <div class="text-2xl font-semibold text-slate-900">{item.value}</div>
+                                <div class="text-xs text-slate-500">{item.label}</div>
+                            </div>
+                        )}</For>
+                    </div>
+                </Show>
 
-                <Show when={!loading()} fallback={<div class="flex justify-center py-20 text-blue-500"><FaSolidSpinner class="animate-spin text-2xl"/></div>}>
+                <Show when={!loading()} fallback={<AutomationSkeleton/>}>
                     <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                         <div class="border-b border-slate-100 px-5 py-4">
                             <h2 class="font-semibold text-slate-900">Похожие операции без категории</h2>
@@ -416,6 +544,11 @@ export const AutomationPage: Component = () => {
                                     </div>
                                 )}</For>
                             </div>
+                            <LoadMoreSentinel
+                                hasMore={groupsPage().page < groupsPage().totalPages}
+                                loading={groupsPage().loading}
+                                onLoad={() => void loadMoreGroups()}
+                            />
                         </Show>
                     </section>
 
@@ -441,6 +574,11 @@ export const AutomationPage: Component = () => {
                                     </div>
                                 )}</For>
                             </div>
+                            <LoadMoreSentinel
+                                hasMore={pendingPage().page < pendingPage().totalPages}
+                                loading={pendingPage().loading}
+                                onLoad={() => void loadMoreTransfers("pending")}
+                            />
                         </Show>
                     </section>
 
@@ -482,9 +620,12 @@ export const AutomationPage: Component = () => {
                         </Show>
                     </section>
 
-                    <Show when={transferHistory().length}>
-                        <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-                            <div class="border-b border-slate-100 px-5 py-4"><h2 class="font-semibold text-slate-900">История проверки переводов</h2></div>
+                    <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                        <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                            <h2 class="font-semibold text-slate-900">История проверки переводов</h2>
+                            <Show when={historyPage().initialized}><span class="text-xs text-slate-400">{historyPage().totalItems}</span></Show>
+                        </div>
+                        <Show when={transferHistory().length}>
                             <div class="divide-y divide-slate-100">
                                 <For each={transferHistory()}>{(transfer) => {
                                     const outflow = () => transactionById().get(transfer.outflow_transaction);
@@ -499,8 +640,16 @@ export const AutomationPage: Component = () => {
                                     );
                                 }}</For>
                             </div>
-                        </section>
-                    </Show>
+                        </Show>
+                        <Show when={historyPage().initialized && transferHistory().length === 0}>
+                            <div class="p-8 text-center text-sm text-slate-400">История пока пуста.</div>
+                        </Show>
+                        <LoadMoreSentinel
+                            hasMore={!historyPage().initialized || historyPage().page < historyPage().totalPages}
+                            loading={historyPage().loading}
+                            onLoad={() => void loadMoreTransfers("history")}
+                        />
+                    </section>
                 </Show>
             </div>
 

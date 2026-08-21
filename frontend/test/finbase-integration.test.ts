@@ -148,9 +148,10 @@ describe("Finbase integration (живой PocketBase)", () => {
         await service.createAccountsIfNotExists([makeAccount(domain)]);
         await service.createTransactionsIfNotExists([makeTransaction(domain, externalId)]);
 
-        const json = await apiGet(`collections/transactions/records?perPage=100&filter=${encodeURIComponent(`external_id = "${externalId}"`)}`);
+        const namespacedExternalId = `test_${externalId}`;
+        const json = await apiGet(`collections/transactions/records?perPage=100&filter=${encodeURIComponent(`external_id = "${namespacedExternalId}"`)}`);
         expect(json.items?.length).toBeGreaterThanOrEqual(1);
-        expect(json.items?.[0]?.external_id).toBe(externalId);
+        expect(json.items?.[0]?.external_id).toBe(namespacedExternalId);
     });
 
     it("даты сохраняются как полный ISO (дата+время, UTC)", async () => {
@@ -165,7 +166,7 @@ describe("Finbase integration (живой PocketBase)", () => {
         tx.date = "2026-03-05T23:30:00+03:00";
         await service.createTransactionsIfNotExists([tx]);
 
-        const json = await apiGet(`collections/transactions/records?perPage=100&filter=${encodeURIComponent(`external_id = "${externalId}"`)}`);
+        const json = await apiGet(`collections/transactions/records?perPage=100&filter=${encodeURIComponent(`external_id = "test_${externalId}"`)}`);
         const saved = json.items?.[0]?.date as string | undefined;
         expect(saved).toBeTruthy();
         // 23:30 +03:00 = 20:30 UTC — в записи должно быть время, а не полночь

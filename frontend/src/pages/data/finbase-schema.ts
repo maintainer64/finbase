@@ -78,7 +78,7 @@ export const COLLECTIONS: CollectionSpec[] = [
             {name: "category", label: "Категория", kind: "relation", relation: "categories", listable: true},
             {name: "tags", label: "Теги", kind: "relation-many", relation: "tags", listable: true},
             {name: "date", label: "Дата", kind: "date", required: true, listable: true},
-            {name: "amount", label: "Сумма", kind: "number", required: true, listable: true},
+            {name: "amount", label: "Сумма", kind: "number", listable: true},
             {name: "currency", label: "Валюта", kind: "text", required: true},
             {name: "note", label: "Описание", kind: "textarea", listable: true},
             {name: "external_id", label: "Внешний id", kind: "text"},

@@ -62,6 +62,34 @@ func seedCategories(app core.App, collection *core.Collection) error {
 	return nil
 }
 
+// namespaceTransactionExternalIDs is a one-time data conversion for records
+// imported before Finbase started storing provider-scoped operation ids.
+func namespaceTransactionExternalIDs(app core.App) error {
+	_, err := app.DB().NewQuery(`
+		UPDATE transactions AS tx
+		SET external_id = (
+			SELECT account.provider_code || '_' || tx.external_id
+			FROM accounts AS account
+			WHERE account.id = tx.account
+		)
+		WHERE trim(coalesce(tx.external_id, '')) != ''
+			AND EXISTS (
+				SELECT 1
+				FROM accounts AS account
+				WHERE account.id = tx.account
+					AND trim(coalesce(account.provider_code, '')) != ''
+					AND substr(tx.external_id, 1, length(account.provider_code) + 1) != account.provider_code || '_'
+					AND NOT EXISTS (
+						SELECT 1
+						FROM transactions AS existing
+						WHERE existing.id != tx.id
+							AND existing.external_id = account.provider_code || '_' || tx.external_id
+					)
+			)
+	`).Execute()
+	return err
+}
+
 func createTransactionRules(app core.App, authRule *string) error {
 	if _, err := app.FindCollectionByNameOrId("transaction_rules"); err == nil {
 		return nil
@@ -271,9 +299,15 @@ func upgradeExistingSchema(app core.App, authRule *string) error {
 	if err != nil {
 		return err
 	}
+	if amount, ok := transactions.Fields.GetByName("amount").(*core.NumberField); ok {
+		amount.Required = false
+	}
 	transactions.RemoveIndex("idx_transactions_account_date")
 	transactions.AddIndex("idx_transactions_account_date", false, "account, date", "")
 	if err := app.Save(transactions); err != nil {
+		return err
+	}
+	if err := namespaceTransactionExternalIDs(app); err != nil {
 		return err
 	}
 
@@ -386,7 +420,7 @@ func init() {
 			&core.RelationField{Name: "category", MaxSelect: 1, CollectionId: categories.Id},
 			&core.RelationField{Name: "tags", MaxSelect: 10, CollectionId: tags.Id},
 			&core.DateField{Name: "date", Required: true},
-			&core.NumberField{Name: "amount", Required: true},
+			&core.NumberField{Name: "amount"},
 			&core.TextField{Name: "currency", Required: true, Max: 3},
 			&core.TextField{Name: "note", Max: 1000},
 			&core.TextField{Name: "external_id", Max: 200},
@@ -455,7 +489,7 @@ func init() {
 		// When this migration upgraded a database created by the old chain, a
 		// rollback must not remove the user's base collections.
 		var legacyMigrations int
-		if err := app.DB().NewQuery("SELECT count(*) FROM _migrations WHERE file IN ('0001_initial.go', '20260820_finbase_v2.go')").Row(&legacyMigrations); err == nil && legacyMigrations > 0 {
+		if err := app.DB().NewQuery("SELECT count(*) FROM _migrations WHERE file IN ('0001_initial.go', '20260820_finbase_v2.go', '20260820_finbase_v3.go')").Row(&legacyMigrations); err == nil && legacyMigrations > 0 {
 			return nil
 		}
 		for _, name := range []string{"operation_groups", "flow_splits", "category_sums", "daily_flows", "transaction_rules", "transfers", "transactions", "tags", "categories", "accounts"} {
@@ -467,5 +501,5 @@ func init() {
 			}
 		}
 		return nil
-	}, "20260820_finbase_v3.go")
+	}, "20260821_finbase_v4.go")
 }

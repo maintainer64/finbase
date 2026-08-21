@@ -53,3 +53,17 @@ func TestTransferWindow(t *testing.T) {
 		t.Fatalf("out-of-range transferWindow() = %s; want default 30m", got)
 	}
 }
+
+func TestReportingTimezoneOffset(t *testing.T) {
+	t.Setenv("FINBASE_TIMEZONE_OFFSET", "+05:00")
+	if got := reportingTimezoneOffset(); got != "+05:00" {
+		t.Fatalf("reportingTimezoneOffset() = %q; want +05:00", got)
+	}
+
+	for _, invalid := range []string{"UTC", "+15:00", "+05:99", "+5:00", "+14:30"} {
+		t.Setenv("FINBASE_TIMEZONE_OFFSET", invalid)
+		if got := reportingTimezoneOffset(); got != defaultReportingTimezoneOffset {
+			t.Errorf("reportingTimezoneOffset(%q) = %q; want default", invalid, got)
+		}
+	}
+}

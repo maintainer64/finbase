@@ -52,6 +52,15 @@ export function normalizeDate(value: string): string {
 
 const filterValue = (value: string): string => JSON.stringify(value);
 
+/** Добавляет банковскому id операции пространство имён её провайдера. */
+export const providerExternalId = (providerCode: string, externalId: unknown): string => {
+    const code = providerCode.trim();
+    const value = String(externalId ?? "").trim();
+    if (!code || !value) return value;
+    const prefix = `${code}_`;
+    return value.startsWith(prefix) ? value : `${prefix}${value}`;
+};
+
 export class FinbaseService implements ProviderSync {
     private readonly baseUrl: string;
     private readonly token: string;
@@ -150,30 +159,39 @@ export class FinbaseService implements ProviderSync {
 
     async createTransactionsIfNotExists(transactions: Transaction[], onProgress?: OnProgress): Promise<void> {
         const accounts = await this.listAll("accounts");
-        const accountByExternalId = new Map(accounts.map(a => [a.external_id as string, a.id]));
+        const accountByExternalId = new Map(accounts.map(account => [account.external_id, account]));
 
         const total = transactions.length;
         let current = 0;
         for (const transaction of transactions) {
             current++;
             onProgress?.({stage: "Отправка операций в Finbase", current, total});
-            const accountId = accountByExternalId.get(transaction.account)
-                ?? [...accountByExternalId.entries()].find(([extId]) => extId && transaction.account.startsWith(extId))?.[1];
-            if (!accountId) {
+            const account = accountByExternalId.get(transaction.account)
+                ?? [...accountByExternalId.entries()].find(([externalId]) => (
+                    externalId && transaction.account.startsWith(externalId)
+                ))?.[1];
+            if (!account) {
                 logSync(`Пропуск операции: счёт «${transaction.account}» не найден`, "warn");
                 continue;
             }
-            const dupFilter = `account = ${filterValue(accountId)} && external_id = ${filterValue(transaction.external_id)}`;
-            if (await this.find("transactions", dupFilter)) continue;
+            const externalId = providerExternalId(account.provider_code, transaction.external_id);
+            const duplicateIds = [...new Set([externalId, transaction.external_id].filter(Boolean))];
+            if (duplicateIds.length > 0) {
+                const externalIdFilter = duplicateIds
+                    .map(id => `external_id = ${filterValue(id)}`)
+                    .join(" || ");
+                const dupFilter = `account = ${filterValue(account.id)} && (${externalIdFilter})`;
+                if (await this.find("transactions", dupFilter)) continue;
+            }
             await this.request("POST", "collections/transactions/records", {
-                account: accountId,
+                account: account.id,
                 category: transaction.category,
                 tags: transaction.tags,
                 date: normalizeDate(transaction.date),
                 amount: transaction.amount,
                 currency: transaction.currency,
                 note: transaction.note,
-                external_id: transaction.external_id || "",
+                external_id: externalId,
             });
         }
     }
@@ -210,6 +228,25 @@ export class FinbaseService implements ProviderSync {
             if (items.length >= result.totalItems || result.items.length === 0) return items;
             page++;
         }
+    }
+
+    /** Одна страница PocketBase без автоматической выгрузки всей коллекции. */
+    async listPage<K extends CollectionName>(
+        collection: K,
+        page: number,
+        perPage: number,
+        options: {filter?: string; sort?: string} = {},
+    ): Promise<PocketBaseListResponse<CollectionRecords[K]>> {
+        const query = new URLSearchParams({
+            page: String(page),
+            perPage: String(perPage),
+        });
+        if (options.filter) query.set("filter", options.filter);
+        if (options.sort) query.set("sort", options.sort);
+        return this.request<PocketBaseListResponse<CollectionRecords[K]>>(
+            "GET",
+            `collections/${collection}/records?${query.toString()}`,
+        );
     }
 
     async getAccountsList(): Promise<AccountRecord[]> {
@@ -256,15 +293,35 @@ export class FinbaseService implements ProviderSync {
         return this.listAll("transactions", filter);
     }
 
+    /** Детали только тех операций, которые нужны загруженной странице переводов. */
+    async getTransactionsByIds(ids: string[], batchSize = 40): Promise<TransactionRecord[]> {
+        const uniqueIds = [...new Set(ids.filter(Boolean))];
+        const records: TransactionRecord[] = [];
+        for (let offset = 0; offset < uniqueIds.length; offset += batchSize) {
+            const batch = uniqueIds.slice(offset, offset + batchSize);
+            const filter = batch.map(id => `id = ${filterValue(id)}`).join(" || ");
+            const page = await this.listPage("transactions", 1, batch.length, {filter});
+            records.push(...page.items);
+        }
+        return records;
+    }
+
     async getTransactionRules(): Promise<TransactionRuleRecord[]> {
         return this.listAll("transaction_rules");
     }
 
-    async getOperationGroups(): Promise<OperationGroupRecord[]> {
-        return this.listAll("operation_groups");
+    async getOperationGroupsPage(page: number, perPage: number): Promise<PocketBaseListResponse<OperationGroupRecord>> {
+        return this.listPage("operation_groups", page, perPage, {sort: "-transactions_count"});
     }
 
-    async getTransfers(): Promise<TransferRecord[]> {
-        return this.listAll("transfers");
+    async getTransfersPage(
+        page: number,
+        perPage: number,
+        status: "pending" | "history",
+    ): Promise<PocketBaseListResponse<TransferRecord>> {
+        return this.listPage("transfers", page, perPage, {
+            filter: status === "pending" ? `status = "pending"` : `status != "pending"`,
+            sort: status === "pending" ? "-created" : "-updated",
+        });
     }
 }

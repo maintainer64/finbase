@@ -91,8 +91,7 @@ export const SyncPage: Component = () => {
         }
     });
 
-    // Сервисы поднимаются из localStorage асинхронно (onMount useUniversalStorage),
-    // поэтому ждём, пока нужный сервис появится, и стартуем один раз.
+    // Ждём, пока нужный сервис появится, и стартуем один раз.
     createEffect(() => {
         const req = request();
         if (!req || started() || status() === "error") return;

@@ -34,7 +34,8 @@ VOLUME /pb/pb_data
 # Demo is opt-in. Set FINBASE_DEMO=true when starting the container.
 ENV FINBASE_DEMO=false \
     FINBASE_DEMO_DAYS=180 \
-    FINBASE_TRANSFER_WINDOW_MINUTES=30
+    FINBASE_TRANSFER_WINDOW_MINUTES=30 \
+    FINBASE_TIMEZONE_OFFSET=+05:00
 
 # Запуск (без shell, поэтому только exec-форма). ENTRYPOINT позволяет выполнять
 # служебные команды вроде `docker compose run --rm finbase_web demo`.

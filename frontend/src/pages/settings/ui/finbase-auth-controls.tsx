@@ -6,16 +6,25 @@ import {loginWithFinbaseOIDC} from "@/shared/finbase/auth";
 import {Input} from "@/components/ui/input";
 import {Label} from "@/components/ui/label";
 import {getFinbaseTokenError, normalizeFinbaseToken} from "@/shared/finbase/token";
+import {isFullAppWindow, openFinbaseTab} from "@/shared/open-finbase";
 
 export const FinbaseAuthControls: Component<{showUrl?: boolean}> = (props) => {
     const [url, setUrl] = useSetting("finbase-url");
     const [token, setToken] = useSetting("finbase-token");
     const [authName, setAuthName] = useSetting("finbase-auth-name");
     const [loading, setLoading] = createSignal(false);
+    const [loginMovedToTab, setLoginMovedToTab] = createSignal(false);
     const tokenError = createMemo(() => token() ? getFinbaseTokenError(token()) : null);
     const hasValidToken = createMemo(() => Boolean(normalizeFinbaseToken(token())) && !tokenError());
 
     const login = async () => {
+        // Chrome закрывает action popup, когда OAuth открывает окно Authelia.
+        // Авторизацию запускаем из обычной вкладки, которая переживёт весь flow.
+        if (!isFullAppWindow()) {
+            openFinbaseTab("settings");
+            setLoginMovedToTab(true);
+            return;
+        }
         setLoading(true);
         try {
             const result = await loginWithFinbaseOIDC(url());
@@ -58,6 +67,12 @@ export const FinbaseAuthControls: Component<{showUrl?: boolean}> = (props) => {
                 )}
             </Show>
 
+            <Show when={loginMovedToTab()}>
+                <div class="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                    Finbase открыт в новой вкладке. Нажмите там «Войти через Authelia / OIDC».
+                </div>
+            </Show>
+
             <Show when={hasValidToken()} fallback={
                 <button
                     type="button"
@@ -66,7 +81,11 @@ export const FinbaseAuthControls: Component<{showUrl?: boolean}> = (props) => {
                     onClick={login}
                 >
                     <LogIn size={17}/>
-                    {loading() ? "Открываем Authelia…" : "Войти через Authelia / OIDC"}
+                    {loading()
+                        ? "Открываем Authelia…"
+                        : isFullAppWindow()
+                            ? "Войти через Authelia / OIDC"
+                            : "Открыть вход в новой вкладке"}
                 </button>
             }>
                 <div class="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">

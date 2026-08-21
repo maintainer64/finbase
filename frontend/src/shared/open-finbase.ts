@@ -22,7 +22,7 @@ export const useFullAppWindow = (): Accessor<boolean> => {
     return fullApp;
 };
 
-export const openFinbaseTab = (route: "statistics" | "data" | "automation" = "statistics") => {
+export const openFinbaseTab = (route: "statistics" | "data" | "automation" | "settings" = "statistics") => {
     const chromeApi = (window as unknown as ChromeLikeWindow).chrome;
     const base = chromeApi?.runtime?.getURL?.("index.html") ?? window.location.href.split("#")[0];
     const target = `${base}#/${route}`;

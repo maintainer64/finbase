@@ -42,6 +42,12 @@ import {CategoryDonut} from "./category-donut";
 const DAY_MS = 86_400_000;
 
 const dayKey = (d: Date): string => d.toISOString().slice(0, 10);
+const calendarDayKey = (date: Date): string => [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+].join("-");
+const calendarDayBoundary = (day: string): string => new Date(`${day}T00:00:00`).toISOString();
 
 const isoWeekKey = (day: string): string => {
     const d = new Date(`${day}T00:00:00Z`);
@@ -86,18 +92,19 @@ const formatAccountDate = (value: string): string => {
 const fmtMoney = (value: number): string => `${fmt.format(value)} ₽`;
 
 const PERIODS: {key: string; label: string; range: () => {from: string; to: string}}[] = [
-    {key: "30d", label: "30 дней", range: () => ({from: dayKey(new Date(Date.now() - 30 * DAY_MS)), to: dayKey(new Date())})},
+    {key: "30d", label: "30 дней", range: () => ({from: calendarDayKey(new Date(Date.now() - 30 * DAY_MS)), to: calendarDayKey(new Date())})},
     {key: "week", label: "Неделя", range: () => {
         const now = new Date();
-        const dayNum = (now.getUTCDay() + 6) % 7;
-        const monday = new Date(now.getTime() - dayNum * DAY_MS);
-        return {from: dayKey(monday), to: dayKey(now)};
+        const dayNum = (now.getDay() + 6) % 7;
+        const monday = new Date(now);
+        monday.setDate(now.getDate() - dayNum);
+        return {from: calendarDayKey(monday), to: calendarDayKey(now)};
     }},
     {key: "month", label: "Месяц", range: () => {
         const now = new Date();
-        return {from: `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01`, to: dayKey(now)};
+        return {from: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`, to: calendarDayKey(now)};
     }},
-    {key: "1y", label: "Год", range: () => ({from: dayKey(new Date(Date.now() - 365 * DAY_MS)), to: dayKey(new Date())})},
+    {key: "1y", label: "Год", range: () => ({from: calendarDayKey(new Date(Date.now() - 365 * DAY_MS)), to: calendarDayKey(new Date())})},
     {key: "all", label: "Всё время", range: () => ({from: "", to: ""})},
 ];
 
@@ -454,8 +461,8 @@ export const StatisticsPage: Component = () => {
             const accountsFilter = accountIds.map(id => `account = ${JSON.stringify(id)}`).join(" || ");
             filters.push(accountIds.length > 1 ? `(${accountsFilter})` : accountsFilter);
         }
-        if (from) filters.push(`date >= ${JSON.stringify(`${from}T00:00:00.000Z`)}`);
-        if (toExclusive) filters.push(`date < ${JSON.stringify(`${toExclusive}T00:00:00.000Z`)}`);
+        if (from) filters.push(`date >= ${JSON.stringify(calendarDayBoundary(from))}`);
+        if (toExclusive) filters.push(`date < ${JSON.stringify(calendarDayBoundary(toExclusive))}`);
 
         try {
             const records = await service.getTransactions(filters.join(" && "));

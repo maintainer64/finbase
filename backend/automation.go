@@ -110,6 +110,9 @@ func registerAutomation(app *pocketbase.PocketBase) {
 	app.OnRecordAfterUpdateSuccess("transaction_rules").BindFunc(applyRuleToHistory)
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		if err := configureReportingTimezone(e.App); err != nil {
+			return fmt.Errorf("configure Finbase reporting timezone: %w", err)
+		}
 		if err := recalculateAllAccountBalances(e.App); err != nil {
 			return fmt.Errorf("recalculate Finbase balances: %w", err)
 		}
