@@ -7,9 +7,11 @@ import {PocketBaseRecord, WritableRecord} from "@/shared/finbase/models";
 import {COLLECTIONS, CollectionSpec, FieldSpec} from "./finbase-schema";
 import {MultiSelect} from "@/pages/statistics/multi-select";
 import {CategoryIcon, CategoryIconPicker} from "@/components/ui/category-icon";
-import {ArrowDown, ArrowUp, ArrowUpDown, Maximize2, RotateCcw, Search} from "lucide-solid";
+import {ArrowDown, ArrowUp, ArrowUpDown, Download, FileUp, Maximize2, RotateCcw, Search} from "lucide-solid";
 import {openFinbaseTab, useFullAppWindow} from "@/shared/open-finbase";
 import {buildDataFilter, EMPTY_RELATION_FILTER} from "./data-filter";
+import {parseTransactionCsv, type TransactionCsvIssue, type TransactionCsvPreview} from "./transaction-csv";
+import {downloadTransactionCsvExample, TransactionCsvDialog} from "./transaction-csv-dialog";
 
 type UiRecord = PocketBaseRecord & Record<string, unknown>;
 
@@ -325,6 +327,10 @@ export const DataPage: Component = () => {
     const [error, setError] = createSignal("");
     const [modal, setModal] = createSignal<{record: UiRecord | null} | null>(null);
     const [saving, setSaving] = createSignal(false);
+    const [csvDialog, setCsvDialog] = createSignal<{filename: string; preview: TransactionCsvPreview} | null>(null);
+    const [csvImporting, setCsvImporting] = createSignal(false);
+    const [csvProgress, setCsvProgress] = createSignal({completed: 0, total: 0});
+    const [csvImportIssues, setCsvImportIssues] = createSignal<TransactionCsvIssue[]>([]);
     const [search, setSearch] = createSignal("");
     const [debouncedSearch, setDebouncedSearch] = createSignal("");
     const [fieldFilters, setFieldFilters] = createSignal<Record<string, string>>({});
@@ -583,6 +589,71 @@ export const DataPage: Component = () => {
         setAmountKind("");
     };
 
+    const selectCsvFile = async (event: Event) => {
+        const input = event.currentTarget as HTMLInputElement;
+        const file = input.files?.[0];
+        input.value = "";
+        if (!file) return;
+        const options = relationOptions();
+        if (!options.has("accounts") || !options.has("categories") || !options.has("tags")) {
+            toast.error("Справочники ещё загружаются — попробуйте через пару секунд");
+            return;
+        }
+        try {
+            const named = (relation: string) => (options.get(relation) ?? []).map(item => ({id: item.id, name: item.label}));
+            const preview = parseTransactionCsv(await file.text(), {
+                accounts: named("accounts"),
+                categories: named("categories").filter(item => item.name !== "Переводы"),
+                tags: named("tags"),
+            });
+            if (preview.totalRows === 0) {
+                toast.error("CSV не содержит операций");
+                return;
+            }
+            setCsvImportIssues([]);
+            setCsvProgress({completed: 0, total: preview.rows.length});
+            setCsvDialog({filename: file.name, preview});
+        } catch (cause) {
+            toast.error(`Не удалось разобрать CSV: ${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+    };
+
+    const importCsv = async () => {
+        const api = finbase();
+        const current = csvDialog();
+        if (!api || !current || current.preview.rows.length === 0) return;
+        setCsvImporting(true);
+        setCsvImportIssues([]);
+        setCsvProgress({completed: 0, total: current.preview.rows.length});
+        const rows = current.preview.rows;
+        try {
+            const result = await api.importTransactions(
+                rows.map(row => row.transaction),
+                4,
+                (completed, total) => setCsvProgress({completed, total}),
+            );
+            const failures = result.failures.map(failure => ({
+                line: rows[failure.index]?.line ?? failure.index + 2,
+                message: failure.message,
+            }));
+            setCsvImportIssues(failures);
+            if (result.created > 0) reload();
+            const parts = [`создано ${result.created}`];
+            if (result.skipped) parts.push(`уже существовало ${result.skipped}`);
+            if (current.preview.issues.length) parts.push(`некорректных строк ${current.preview.issues.length}`);
+            if (failures.length) parts.push(`ошибок записи ${failures.length}`);
+            if (failures.length) toast.error(`Импорт завершён: ${parts.join(", ")}`);
+            else {
+                toast.success(`Импорт завершён: ${parts.join(", ")}`);
+                setCsvDialog(null);
+            }
+        } catch (cause) {
+            toast.error(`Не удалось импортировать CSV: ${cause instanceof Error ? cause.message : String(cause)}`);
+        } finally {
+            setCsvImporting(false);
+        }
+    };
+
     return (
         <Show when={fullApp()} fallback={
             <div class="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
@@ -600,6 +671,15 @@ export const DataPage: Component = () => {
                 >
                     <FaSolidPlus/> Добавить
                 </button>
+                <Show when={collectionName() === "transactions"}>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" class="secondary-button" onClick={downloadTransactionCsvExample}><Download size={15}/> Пример CSV</button>
+                        <label class="secondary-button cursor-pointer">
+                            <FileUp size={15}/> Импорт CSV
+                            <input class="hidden" type="file" accept=".csv,text/csv" onChange={(event) => void selectCsvFile(event)}/>
+                        </label>
+                    </div>
+                </Show>
             </div>
 
             <div class="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -784,6 +864,17 @@ export const DataPage: Component = () => {
                     onClose={() => setModal(null)}
                 />
             </Show>
+            <Show when={csvDialog()}>{(current) => (
+                <TransactionCsvDialog
+                    filename={current().filename}
+                    preview={current().preview}
+                    importing={csvImporting()}
+                    progress={csvProgress()}
+                    importIssues={csvImportIssues()}
+                    onImport={() => void importCsv()}
+                    onClose={() => { if (!csvImporting()) setCsvDialog(null); }}
+                />
+            )}</Show>
         </div>
         </Show>
     );

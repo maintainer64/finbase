@@ -175,7 +175,7 @@ func createFlowSplits(app core.App, authRule *string) error {
 	flowSplits.ListRule = authRule
 	flowSplits.ViewRule = authRule
 	flowSplits.ViewQuery = `SELECT
-		(row_number() over (order by x.account, x.day) - 1) as id,
+		(row_number() over (order by x.account, x.day, x.category, x.tags) - 1) as id,
 		x.account, x.day, x.category, x.tags, x.delta
 	FROM (
 		SELECT t.account, date(t.date) as day, t.category, t.tags, sum(t.amount) as delta

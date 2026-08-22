@@ -115,16 +115,17 @@ func registerAutomation(app *pocketbase.PocketBase) {
 	app.OnRecordAfterCreateSuccess("transaction_rules").BindFunc(applyRuleToHistory)
 	app.OnRecordAfterUpdateSuccess("transaction_rules").BindFunc(applyRuleToHistory)
 
-	// Подтверждение пары делает обе операции системным переводом. Статус и
-	// категории сохраняются одной транзакцией БД, поэтому частично размеченной
-	// пары быть не может.
+	// Пара, ее уникальность и системная категория подтвержденного перевода
+	// сохраняются одной транзакцией БД.
 	saveTransfer := func(e *core.RecordEvent) error {
-		if e.Record.GetString("status") != "accepted" {
-			return e.Next()
-		}
 		apply := func() error {
-			if err := categorizeAcceptedTransfer(e.App, e.Record); err != nil {
-				return fmt.Errorf("categorize accepted transfer: %w", err)
+			if err := validateTransferPair(e.App, e.Record); err != nil {
+				return fmt.Errorf("validate transfer pair: %w", err)
+			}
+			if e.Record.GetString("status") == "accepted" {
+				if err := categorizeAcceptedTransfer(e.App, e.Record); err != nil {
+					return fmt.Errorf("categorize accepted transfer: %w", err)
+				}
 			}
 			return e.Next()
 		}
@@ -155,6 +156,54 @@ func registerAutomation(app *pocketbase.PocketBase) {
 		}
 		return e.Next()
 	})
+}
+
+func validateTransferPair(app core.App, transfer *core.Record) error {
+	inflowID := transfer.GetString("inflow_transaction")
+	outflowID := transfer.GetString("outflow_transaction")
+	if inflowID == "" || outflowID == "" || inflowID == outflowID {
+		return errors.New("перевод должен ссылаться на две разные операции")
+	}
+
+	inflow, err := app.FindRecordById("transactions", inflowID)
+	if err != nil {
+		return fmt.Errorf("операция поступления не найдена: %w", err)
+	}
+	outflow, err := app.FindRecordById("transactions", outflowID)
+	if err != nil {
+		return fmt.Errorf("операция расхода не найдена: %w", err)
+	}
+	inflowAmount := inflow.GetFloat("amount")
+	outflowAmount := outflow.GetFloat("amount")
+	if inflowAmount <= 0 || outflowAmount >= 0 {
+		return errors.New("перевод должен содержать одно поступление и один расход")
+	}
+	if math.Abs(inflowAmount+outflowAmount) > 0.000001 {
+		return errors.New("суммы поступления и расхода перевода должны совпадать")
+	}
+	if inflow.GetString("currency") != outflow.GetString("currency") {
+		return errors.New("валюта поступления и расхода перевода должна совпадать")
+	}
+	if inflow.GetString("account") == outflow.GetString("account") {
+		return errors.New("перевод должен связывать разные счета")
+	}
+
+	if transfer.GetString("status") != "rejected" {
+		var duplicates int
+		err := app.DB().NewQuery(`SELECT count(*) FROM transfers
+			WHERE id != {:current} AND status != 'rejected'
+				AND (inflow_transaction = {:inflow} OR outflow_transaction = {:inflow}
+					OR inflow_transaction = {:outflow} OR outflow_transaction = {:outflow})`).
+			Bind(dbx.Params{"current": transfer.Id, "inflow": inflowID, "outflow": outflowID}).
+			Row(&duplicates)
+		if err != nil {
+			return err
+		}
+		if duplicates > 0 {
+			return errors.New("одна из операций уже используется в другом активном переводе")
+		}
+	}
+	return nil
 }
 
 func ensureTransferCategory(app core.App) (*core.Record, error) {

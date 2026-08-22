@@ -47,7 +47,7 @@ describe("пагинация Finbase", () => {
         expect(perPages).toEqual(["40", "40", "5"]);
     });
 
-    it("передаёт период на сервер при загрузке статистики счёта", async () => {
+    it("передаёт период и все счета одним фильтром view", async () => {
         const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
             page: 1,
             perPage: 200,
@@ -58,11 +58,11 @@ describe("пагинация Finbase", () => {
         vi.stubGlobal("fetch", fetchMock);
 
         const service = new FinbaseService("https://finbase.example", token);
-        await service.getDailyFlows(["account-1"], "2026-08-01", "2026-08-31");
+        await service.getDailyFlows(["account-1", "account-2"], "2026-08-01", "2026-08-31");
 
         const url = new URL(String(fetchMock.mock.calls[0][0]));
         expect(url.searchParams.get("filter")).toBe(
-            'account = "account-1" && day >= "2026-08-01" && day <= "2026-08-31"',
+            '(account = "account-1" || account = "account-2") && day >= "2026-08-01" && day <= "2026-08-31"',
         );
     });
 
@@ -96,6 +96,25 @@ describe("пагинация Finbase", () => {
         expect(url.searchParams.get("filter")).toBe(
             'category = "" && note:lower = "Яндекс Лавка" && amount < 0',
         );
+    });
+
+    it("открывает одну группу по offset для интерактивной разметки", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
+            page: 4,
+            perPage: 1,
+            totalItems: 12,
+            totalPages: 12,
+            items: [],
+        }), {status: 200, headers: {"Content-Type": "application/json"}}));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const service = new FinbaseService("https://finbase.example", token);
+        await service.getOperationGroupsPage(4, 1);
+
+        const url = new URL(String(fetchMock.mock.calls[0][0]));
+        expect(url.searchParams.get("page")).toBe("4");
+        expect(url.searchParams.get("perPage")).toBe("1");
+        expect(url.searchParams.get("sort")).toBe("-transactions_count");
     });
 
     it("массово размечает только уникальные выбранные операции", async () => {
@@ -136,6 +155,34 @@ describe("серверные фильтры таблицы данных", () => 
 });
 
 describe("запись операций Finbase", () => {
+    it("при повторном CSV-импорте пропускает существующие и повторяющиеся external_id", async () => {
+        const created: Record<string, unknown>[] = [];
+        const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+            if (init?.method === "POST") {
+                created.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+                return new Response(JSON.stringify({id: "created"}), {status: 200, headers: {"Content-Type": "application/json"}});
+            }
+            return new Response(JSON.stringify({
+                page: 1,
+                perPage: 2,
+                totalItems: 1,
+                totalPages: 1,
+                items: [{id: "existing", external_id: "csv-existing"}],
+            }), {status: 200, headers: {"Content-Type": "application/json"}});
+        });
+        vi.stubGlobal("fetch", fetchMock);
+
+        const service = new FinbaseService("https://finbase.example", token);
+        const result = await service.importTransactions([
+            {external_id: "csv-existing"},
+            {external_id: "csv-new"},
+            {external_id: "csv-new"},
+        ]);
+
+        expect(result).toEqual({created: 1, skipped: 2, failures: []});
+        expect(created).toEqual([{external_id: "csv-new"}]);
+    });
+
     it("добавляет provider_code к external_id и разрешает нулевую сумму", async () => {
         const created: Record<string, unknown>[] = [];
         const accounts = [

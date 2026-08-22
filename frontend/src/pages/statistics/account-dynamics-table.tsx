@@ -1,7 +1,7 @@
 import {Component, createMemo, createSignal, For, Show} from "solid-js";
 import {ArrowDown, ArrowUp, ArrowUpDown} from "lucide-solid";
 
-export type DynamicsBucket = "day" | "week" | "month";
+export type DynamicsBucket = "year" | "month" | "week";
 
 export interface DynamicsCell {
     income: number;
@@ -23,12 +23,6 @@ export interface DynamicsSelection {
     period?: string;
 }
 
-const BUCKET_OPTIONS: [DynamicsBucket, string][] = [
-    ["day", "День"],
-    ["week", "Неделя"],
-    ["month", "Месяц"],
-];
-
 const fmt = new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 0});
 const monthFmt = new Intl.DateTimeFormat("ru-RU", {month: "short", year: "numeric", timeZone: "UTC"});
 
@@ -48,8 +42,7 @@ export const dynamicsPeriodLabel = (period: string, bucket: DynamicsBucket): str
         return `${week} нед. · ${year}`;
     }
     if (bucket === "month") return monthFmt.format(new Date(`${period}-01T00:00:00Z`));
-    const [year, month, day] = period.split("-");
-    return `${day}.${month}.${year.slice(2)}`;
+    return period;
 };
 
 const cellTitle = (cell: DynamicsCell): string =>
@@ -59,7 +52,6 @@ export const AccountDynamicsTable: Component<{
     periods: string[];
     rows: DynamicsAccountRow[];
     bucket: DynamicsBucket;
-    onBucketChange: (bucket: DynamicsBucket) => void;
     onSelect: (selection: DynamicsSelection) => void;
 }> = (props) => {
     const [sort, setSort] = createSignal<{key: "name" | "total" | string; direction: "asc" | "desc"}>({key: "total", direction: "desc"});
@@ -106,27 +98,10 @@ export const AccountDynamicsTable: Component<{
 
     return (
         <>
-            <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div class="mb-3">
                 <div>
                     <h2 class="text-sm font-medium text-gray-600">Динамика по счетам</h2>
                     <p class="mt-0.5 text-xs text-gray-400">Чистое движение денег за каждый период</p>
-                </div>
-                <div class="flex gap-1 rounded-lg bg-slate-100 p-1">
-                    <For each={BUCKET_OPTIONS}>
-                        {([key, label]) => (
-                            <button
-                                type="button"
-                                class={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-                                    props.bucket === key
-                                        ? "bg-white font-medium text-slate-800 shadow-sm"
-                                        : "text-slate-500 hover:text-slate-700"
-                                }`}
-                                onClick={() => props.onBucketChange(key)}
-                            >
-                                {label}
-                            </button>
-                        )}
-                    </For>
                 </div>
             </div>
 

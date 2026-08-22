@@ -66,7 +66,7 @@ func configureReportingTimezone(app core.App) error {
 		return err
 	}
 	flowSplitsQuery := fmt.Sprintf(`SELECT
-		(row_number() over (order by x.account, x.day) - 1) as id,
+		(row_number() over (order by x.account, x.day, x.category, x.tags) - 1) as id,
 		x.account, x.day, x.category, x.tags, x.delta
 	FROM (
 		SELECT t.account, %[1]s as day, t.category, t.tags, sum(t.amount) as delta

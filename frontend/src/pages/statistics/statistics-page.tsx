@@ -1,4 +1,4 @@
-import {Component, createEffect, createMemo, createSignal, For, onMount, Show} from "solid-js";
+import {batch, Component, createEffect, createMemo, createSignal, For, onMount, Show} from "solid-js";
 import {useSetting} from "@/shared/settings";
 import {currentRoute, routeParams} from "@/shared/routing";
 import {
@@ -7,9 +7,9 @@ import {
     FaSolidArrowTrendUp,
     FaSolidFilter,
     FaSolidScaleBalanced,
-    FaSolidSpinner,
     FaSolidWallet,
 } from "solid-icons/fa";
+import {LoaderCircle} from "lucide-solid";
 import {FinbaseService} from "@/shared/providers/services/finbase/finbase-service";
 import {
     AccountRecord,
@@ -36,17 +36,13 @@ import {
 import {DynamicsDetailDialog} from "./dynamics-detail-dialog";
 import {BalanceChart, BalanceSeries} from "./balance-chart";
 import {CategoryDonut} from "./category-donut";
+import {STATISTICS_PERIODS as PERIODS, statisticsRangeFromParams} from "./statistics-period";
 
 // ==================== Утилиты ====================
 
 const DAY_MS = 86_400_000;
 
 const dayKey = (d: Date): string => d.toISOString().slice(0, 10);
-const calendarDayKey = (date: Date): string => [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
-].join("-");
 const calendarDayBoundary = (day: string): string => new Date(`${day}T00:00:00`).toISOString();
 
 const isoWeekKey = (day: string): string => {
@@ -66,7 +62,10 @@ const addDays = (day: string, amount: number): string => {
 };
 
 const dynamicsPeriodRange = (period: string, bucket: DynamicsBucket): {from: string; toExclusive: string} => {
-    if (bucket === "day") return {from: period, toExclusive: addDays(period, 1)};
+    if (bucket === "year") {
+        const year = Number(period);
+        return {from: `${year}-01-01`, toExclusive: `${year + 1}-01-01`};
+    }
     if (bucket === "month") {
         const [year, month] = period.split("-").map(Number);
         return {
@@ -91,21 +90,10 @@ const formatAccountDate = (value: string): string => {
 
 const fmtMoney = (value: number): string => `${fmt.format(value)} ₽`;
 
-const PERIODS: {key: string; label: string; range: () => {from: string; to: string}}[] = [
-    {key: "30d", label: "30 дней", range: () => ({from: calendarDayKey(new Date(Date.now() - 30 * DAY_MS)), to: calendarDayKey(new Date())})},
-    {key: "week", label: "Неделя", range: () => {
-        const now = new Date();
-        const dayNum = (now.getDay() + 6) % 7;
-        const monday = new Date(now);
-        monday.setDate(now.getDate() - dayNum);
-        return {from: calendarDayKey(monday), to: calendarDayKey(now)};
-    }},
-    {key: "month", label: "Месяц", range: () => {
-        const now = new Date();
-        return {from: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`, to: calendarDayKey(now)};
-    }},
-    {key: "1y", label: "Год", range: () => ({from: calendarDayKey(new Date(Date.now() - 365 * DAY_MS)), to: calendarDayKey(new Date())})},
-    {key: "all", label: "Всё время", range: () => ({from: "", to: ""})},
+const DETAIL_LEVELS: {key: DynamicsBucket; label: string}[] = [
+    {key: "year", label: "По годам"},
+    {key: "month", label: "По месяцам"},
+    {key: "week", label: "По неделям"},
 ];
 
 const GROUPS: {key: string; label: string}[] = [
@@ -121,7 +109,6 @@ const WITHOUT_CATEGORY = "__without_category__";
 const WITHOUT_TAGS = "__without_tags__";
 const WITHOUT_OWNER = "__without_owner__";
 const WITHOUT_PROVIDER = "__without_provider__";
-const STATISTICS_LOAD_CONCURRENCY = 3;
 const UNCATEGORIZED_CATEGORY: CategoryRecord = {
     id: WITHOUT_CATEGORY,
     name: "Без категории",
@@ -147,6 +134,7 @@ interface QueryState {
     tags: string[];
     owners: string[];
     providers: string[];
+    period: string;
     from: string;
     to: string;
 }
@@ -166,6 +154,7 @@ export const StatisticsPage: Component = () => {
     // --- реакция на query-параметры ---
     const query = createMemo<QueryState>(() => {
         const p = routeParams();
+        const range = statisticsRangeFromParams(p);
         return {
             accounts: (p.get("accounts") ?? "").split(",").filter(Boolean),
             groups: (p.get("groups") ?? "").split(",").filter(Boolean),
@@ -173,8 +162,7 @@ export const StatisticsPage: Component = () => {
             tags: (p.get("tags") ?? "").split(",").filter(Boolean),
             owners: (p.get("owners") ?? "").split(",").filter(Boolean),
             providers: (p.get("providers") ?? "").split(",").filter(Boolean),
-            from: p.get("from") ?? "",
-            to: p.get("to") ?? "",
+            ...range,
         };
     });
 
@@ -192,6 +180,7 @@ export const StatisticsPage: Component = () => {
         if (patch.tags !== undefined) set("tags", patch.tags);
         if (patch.owners !== undefined) set("owners", patch.owners);
         if (patch.providers !== undefined) set("providers", patch.providers);
+        if (patch.period !== undefined) set("period", patch.period);
         if (patch.from !== undefined) set("from", patch.from);
         if (patch.to !== undefined) set("to", patch.to);
         window.location.hash = `/${currentRoute()}${params.toString() ? `?${params}` : ""}`;
@@ -200,6 +189,7 @@ export const StatisticsPage: Component = () => {
     // активный пресет периода, совпадающий с выбранным диапазоном (или null при ручном выборе)
     const activePreset = createMemo(() => {
         const q = query();
+        if (q.period) return q.period;
         const key = PERIODS.find(p => {
             const {from, to} = p.range();
             return from === q.from && to === q.to;
@@ -214,12 +204,12 @@ export const StatisticsPage: Component = () => {
     const [tags, setTags] = createSignal<TagRecord[]>([]);
     const [flows, setFlows] = createSignal<DailyFlowRecord[]>([]);
     const [splits, setSplits] = createSignal<FlowSplitRecord[]>([]);
+    const [bucket, setBucket] = createSignal<DynamicsBucket>("month");
     const [loading, setLoading] = createSignal(true);
     const [accountsLoading, setAccountsLoading] = createSignal(true);
-    const [loadedAccountIds, setLoadedAccountIds] = createSignal<string[]>([]);
     const [error, setError] = createSignal("");
     const [detailSelection, setDetailSelection] = createSignal<DynamicsSelection | null>(null);
-    const [detailBucket, setDetailBucket] = createSignal<DynamicsBucket>("week");
+    const [detailBucket, setDetailBucket] = createSignal<DynamicsBucket>("month");
     const [detailTransactions, setDetailTransactions] = createSignal<TransactionRecord[]>([]);
     const [detailLoading, setDetailLoading] = createSignal(false);
     const [detailError, setDetailError] = createSignal("");
@@ -345,54 +335,34 @@ export const StatisticsPage: Component = () => {
         if (ids.length === 0) {
             setFlows([]);
             setSplits([]);
-            setLoadedAccountIds([]);
             setLoading(false);
             return;
         }
         const from = fromDay();
         const to = toDay();
         let cancelled = false;
-        let nextAccount = 0;
-        let firstError = "";
         setError("");
         setFlows([]);
         setSplits([]);
-        setLoadedAccountIds([]);
         setLoading(true);
 
-        const loadNextAccount = async () => {
-            while (!cancelled) {
-                const index = nextAccount++;
-                if (index >= ids.length) return;
-                const accountId = ids[index];
-                const [flowResult, splitResult] = await Promise.allSettled([
-                    service.getDailyFlows([accountId], from, to),
-                    service.getFlowSplits([accountId], from, to),
-                ]);
+        void Promise.all([
+            service.getDailyFlows(ids, from, to),
+            service.getFlowSplits(ids, from, to),
+        ])
+            .then(([flowRecords, splitRecords]) => {
                 if (cancelled) return;
-                if (flowResult.status === "fulfilled") {
-                    setFlows(current => [...current, ...flowResult.value]);
-                } else if (!firstError) {
-                    firstError = flowResult.reason instanceof Error ? flowResult.reason.message : String(flowResult.reason);
-                }
-                if (splitResult.status === "fulfilled") {
-                    setSplits(current => [...current, ...splitResult.value]);
-                } else if (!firstError) {
-                    firstError = splitResult.reason instanceof Error ? splitResult.reason.message : String(splitResult.reason);
-                }
-                setLoadedAccountIds(current => [...current, accountId]);
-            }
-        };
-
-        const workers = Array.from(
-            {length: Math.min(STATISTICS_LOAD_CONCURRENCY, ids.length)},
-            () => loadNextAccount(),
-        );
-        void Promise.all(workers).finally(() => {
-            if (cancelled) return;
-            if (firstError) setError(firstError);
-            setLoading(false);
-        });
+                batch(() => {
+                    setFlows(flowRecords);
+                    setSplits(splitRecords);
+                });
+            })
+            .catch((reason) => {
+                if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
         return () => { cancelled = true; };
     });
 
@@ -400,12 +370,20 @@ export const StatisticsPage: Component = () => {
 
     const seriesByAccount = createMemo(() => {
         const ids = effectiveAccounts();
+        const activeBucket = bucket();
         const byAccount = new Map<string, {label: string; value: number}[]>();
         for (const id of ids) {
-            const points = flows()
+            const source = flows()
                 .filter(f => f.account === id)
-                .sort((a, b) => a.day.localeCompare(b.day))
-                .map(f => ({label: f.day, value: f.start_balance + f.running}));
+                .sort((a, b) => a.day.localeCompare(b.day));
+            const lastByPeriod = new Map<string, DailyFlowRecord>();
+            for (const flow of source) {
+                const period = activeBucket === "year"
+                    ? flow.day.slice(0, 4)
+                    : activeBucket === "month" ? flow.day.slice(0, 7) : isoWeekKey(flow.day);
+                lastByPeriod.set(period, flow);
+            }
+            const points = [...lastByPeriod.values()].map(f => ({label: f.day, value: f.start_balance + f.running}));
             if (points.length) byAccount.set(id, points);
         }
         return byAccount;
@@ -451,17 +429,15 @@ export const StatisticsPage: Component = () => {
     ));
     const periodResult = createMemo(() => periodIncome() - periodExpense());
 
-    const [bucket, setBucket] = createSignal<DynamicsBucket>("week");
-
     const dynamicsPeriods = createMemo(() => {
         const bucketKey = (day: string): string =>
-            bucket() === "day" ? day : bucket() === "week" ? isoWeekKey(day) : day.slice(0, 7);
+            bucket() === "year" ? day.slice(0, 4) : bucket() === "week" ? isoWeekKey(day) : day.slice(0, 7);
         return [...new Set(filteredSplits().map(split => bucketKey(split.day)))].sort();
     });
 
     const dynamicsRows = createMemo<DynamicsAccountRow[]>(() => {
         const bucketKey = (day: string): string =>
-            bucket() === "day" ? day : bucket() === "week" ? isoWeekKey(day) : day.slice(0, 7);
+            bucket() === "year" ? day.slice(0, 4) : bucket() === "week" ? isoWeekKey(day) : day.slice(0, 7);
         const cellsByAccount = new Map<string, Map<string, DynamicsCell>>();
 
         for (const split of filteredSplits()) {
@@ -772,33 +748,47 @@ export const StatisticsPage: Component = () => {
                 </aside>
 
                 <div class="flex-1 flex flex-col gap-4 min-w-0">
-                    {/* Период: пресеты + календарь от/до */}
-                    <div class="flex flex-wrap items-center gap-1">
-                        <For each={PERIODS}>
-                            {(p) => (
+                    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                        <div class="flex flex-wrap items-center gap-1">
+                            <span class="mr-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">Период</span>
+                            <For each={PERIODS}>
+                                {(p) => (
+                                    <button
+                                        class={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                                            activePreset() === p.key
+                                                ? "bg-blue-500 text-white border-blue-500"
+                                                : "bg-white text-gray-600 border-gray-200 hover:border-blue-300"
+                                        }`}
+                                        onClick={() => {
+                                            const {from, to} = p.range();
+                                            updateQuery({period: p.key, from, to});
+                                        }}
+                                    >
+                                        {p.label}
+                                    </button>
+                                )}
+                            </For>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-1 rounded-lg bg-slate-200/70 p-1">
+                            <span class="px-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">Детализация</span>
+                            <For each={DETAIL_LEVELS}>{(level) => (
                                 <button
-                                    class={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
-                                        activePreset() === p.key
-                                            ? "bg-blue-500 text-white border-blue-500"
-                                            : "bg-white text-gray-600 border-gray-200 hover:border-blue-300"
-                                    }`}
-                                    onClick={() => {
-                                        const {from, to} = p.range();
-                                        updateQuery({from, to});
-                                    }}
+                                    type="button"
+                                    class={`rounded-md px-2.5 py-1 text-xs transition ${bucket() === level.key ? "bg-white font-medium text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                                    onClick={() => setBucket(level.key)}
                                 >
-                                    {p.label}
+                                    {level.label}
                                 </button>
-                            )}
-                        </For>
-                        <div class="flex items-center gap-1.5 ml-2 text-xs text-gray-500">
+                            )}</For>
+                        </div>
+                        <div class="flex items-center gap-1.5 text-xs text-gray-500">
                             <label class="flex items-center gap-1">
                                 <span>От</span>
                                 <input
                                     type="date"
                                     class="rounded-md border border-gray-200 px-2 py-1 text-xs bg-white"
                                     value={query().from}
-                                    onChange={(e) => updateQuery({from: e.currentTarget.value.trim()})}
+                                    onChange={(e) => updateQuery({period: "", from: e.currentTarget.value.trim()})}
                                 />
                             </label>
                             <label class="flex items-center gap-1">
@@ -807,20 +797,16 @@ export const StatisticsPage: Component = () => {
                                     type="date"
                                     class="rounded-md border border-gray-200 px-2 py-1 text-xs bg-white"
                                     value={query().to}
-                                    onChange={(e) => updateQuery({to: e.currentTarget.value.trim()})}
+                                    onChange={(e) => updateQuery({period: "", to: e.currentTarget.value.trim()})}
                                 />
                             </label>
                         </div>
                     </div>
 
                     <Show when={loading()}>
-                        <div class="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-700">
-                            <FaSolidSpinner class="animate-spin text-base"/>
-                            <span>
-                                {accountsLoading()
-                                    ? "Загружаем счета…"
-                                    : `Загружено счетов: ${loadedAccountIds().length} из ${effectiveAccounts().length}`}
-                            </span>
+                        <div class="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-700" role="status" aria-live="polite">
+                            <LoaderCircle class="size-4 shrink-0 animate-spin"/>
+                            <span>{accountsLoading() ? "Загружаем счета…" : `Загружаем агрегаты по ${effectiveAccounts().length} счетам…`}</span>
                         </div>
                     </Show>
 
@@ -835,22 +821,22 @@ export const StatisticsPage: Component = () => {
                             <div class="summary-card">
                                 <span class="summary-card__icon text-emerald-600 bg-emerald-50"><FaSolidArrowTrendUp/></span>
                                 <span class="summary-card__label">Поступления</span>
-                                <strong class="summary-card__value text-emerald-700">{fmtMoney(periodIncome())}</strong>
-                                <span class="summary-card__hint">За выбранный период</span>
+                                <strong class="summary-card__value text-emerald-700">{loading() ? "—" : fmtMoney(periodIncome())}</strong>
+                                <span class="summary-card__hint">{loading() ? "Загружаем агрегаты…" : "За выбранный период"}</span>
                             </div>
                             <div class="summary-card">
                                 <span class="summary-card__icon text-rose-600 bg-rose-50"><FaSolidArrowTrendDown/></span>
                                 <span class="summary-card__label">Расходы</span>
-                                <strong class="summary-card__value text-rose-700">{fmtMoney(periodExpense())}</strong>
-                                <span class="summary-card__hint">За выбранный период</span>
+                                <strong class="summary-card__value text-rose-700">{loading() ? "—" : fmtMoney(periodExpense())}</strong>
+                                <span class="summary-card__hint">{loading() ? "Загружаем агрегаты…" : "За выбранный период"}</span>
                             </div>
                             <div class="summary-card">
                                 <span class="summary-card__icon text-violet-600 bg-violet-50"><FaSolidScaleBalanced/></span>
                                 <span class="summary-card__label">Результат</span>
                                 <strong class={`summary-card__value ${periodResult() >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                                    {fmtMoney(periodResult())}
+                                    {loading() ? "—" : fmtMoney(periodResult())}
                                 </strong>
-                                <span class="summary-card__hint">Поступления минус расходы</span>
+                                <span class="summary-card__hint">{loading() ? "Загружаем агрегаты…" : "Поступления минус расходы"}</span>
                             </div>
                         </div>
                     </Show>
@@ -983,7 +969,6 @@ export const StatisticsPage: Component = () => {
                         periods={dynamicsPeriods()}
                         rows={dynamicsRows()}
                         bucket={bucket()}
-                        onBucketChange={setBucket}
                         onSelect={openDynamicsDetails}
                     />
                 </Space>

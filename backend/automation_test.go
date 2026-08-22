@@ -175,4 +175,21 @@ func TestAcceptedTransferAssignsSystemCategory(t *testing.T) {
 	if reportRows != 0 {
 		t.Fatalf("confirmed transfer produced %d flow_splits rows; want 0", reportRows)
 	}
+
+	wrongDirection := core.NewRecord(transfers)
+	wrongDirection.Set("inflow_transaction", outflow.Id)
+	wrongDirection.Set("outflow_transaction", inflow.Id)
+	wrongDirection.Set("status", "rejected")
+	if err := app.Save(wrongDirection); err == nil {
+		t.Fatal("transfer with expense as inflow and income as outflow must be rejected")
+	}
+
+	anotherOutflow := createTransaction(from, -1500, "2026-08-20 14:00:00.000Z", "transfer-test-another-out")
+	duplicate := core.NewRecord(transfers)
+	duplicate.Set("inflow_transaction", inflow.Id)
+	duplicate.Set("outflow_transaction", anotherOutflow.Id)
+	duplicate.Set("status", "pending")
+	if err := app.Save(duplicate); err == nil {
+		t.Fatal("transaction already used in an active transfer must not be reused")
+	}
 }

@@ -11,7 +11,7 @@
     "serve": "vite preview",
     "lint": "eslint 'src/**/*.{ts,tsx}'",
     "lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix",
-    "test": "vitest run test/settings.test.ts test/finbase-token.test.ts test/universal-storage.test.ts test/finbase-pagination.test.ts",
+    "test": "vitest run test/settings.test.ts test/finbase-token.test.ts test/universal-storage.test.ts test/finbase-pagination.test.ts test/transaction-csv.test.ts test/statistics-period.test.ts",
     "test:integration": "vitest run test/",
     "issue:token": "tsx scripts/issue-token.ts",
     "prepare": "cd .. && frontend/node_modules/.bin/husky"

@@ -12,6 +12,8 @@ import {
     Plus,
     RefreshCw,
     Scale,
+    SkipForward,
+    Sparkles,
     Trash2,
     WandSparkles,
     X,
@@ -51,6 +53,22 @@ const emptyDraft = (): RuleDraft => ({
     category: "",
     effectiveDate: "",
     active: true,
+});
+
+const rulePayload = (draft: RuleDraft, category: CategoryRecord) => ({
+    name: draft.name.trim(),
+    resource_type: "transaction" as const,
+    active: draft.active,
+    effective_date: draft.effectiveDate ? `${draft.effectiveDate}T00:00:00.000Z` : "",
+    conditions: [
+        {condition_type: "transaction_name", operator: "like", value: draft.match.trim()},
+        {condition_type: "transaction_type", operator: "=", value: draft.nature},
+    ],
+    actions: [{
+        action_type: "set_transaction_category",
+        value: category.name,
+        value_ref: {type: "Category", id: category.id, name: category.name},
+    }],
 });
 
 const inputClass = "w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
@@ -373,6 +391,249 @@ const GroupOperationsDialog: Component<{
     );
 };
 
+const InteractiveGroupsDialog: Component<{
+    service: FinbaseService;
+    categories: CategoryRecord[];
+    accountLabel: (accountId: string) => string;
+    onClose: () => void;
+}> = (props) => {
+    const [offset, setOffset] = createSignal(0);
+    const [totalGroups, setTotalGroups] = createSignal(0);
+    const [group, setGroup] = createSignal<OperationGroupRecord | null>(null);
+    const [items, setItems] = createSignal<TransactionRecord[]>([]);
+    const [selected, setSelected] = createSignal<Set<string>>(new Set());
+    const [category, setCategory] = createSignal("");
+    const [pageState, setPageState] = createSignal<PageState>(emptyPage());
+    const [loading, setLoading] = createSignal(true);
+    const [saving, setSaving] = createSignal(false);
+    const [finished, setFinished] = createSignal(false);
+    const [error, setError] = createSignal("");
+    let requestId = 0;
+
+    const loadOperations = async (currentGroup: OperationGroupRecord, page: number, reset = false) => {
+        const activeRequest = requestId;
+        setPageState(state => ({...state, loading: true}));
+        try {
+            const result = await props.service.getOperationGroupTransactionsPage(
+                currentGroup,
+                page,
+                GROUP_OPERATIONS_PAGE_SIZE,
+            );
+            if (activeRequest !== requestId || group()?.group_key !== currentGroup.group_key) return;
+            setItems(current => reset ? result.items : [...current, ...result.items]);
+            setPageState(loadedPage(result));
+            return result;
+        } catch (reason) {
+            if (activeRequest === requestId) {
+                setPageState(state => ({...state, loading: false}));
+                setError(reason instanceof Error ? reason.message : String(reason));
+            }
+        }
+    };
+
+    const loadGroup = async (nextOffset: number) => {
+        const activeRequest = ++requestId;
+        setLoading(true);
+        setFinished(false);
+        setError("");
+        setGroup(null);
+        setItems([]);
+        setSelected(new Set<string>());
+        setCategory("");
+        setPageState(emptyPage());
+        try {
+            const result = await props.service.getOperationGroupsPage(nextOffset + 1, 1);
+            if (activeRequest !== requestId) return;
+            setOffset(nextOffset);
+            setTotalGroups(result.totalItems);
+            const nextGroup = result.items[0];
+            if (!nextGroup) {
+                setFinished(true);
+                return;
+            }
+            setGroup(nextGroup);
+            await loadOperations(nextGroup, 1, true);
+        } catch (reason) {
+            if (activeRequest === requestId) setError(reason instanceof Error ? reason.message : String(reason));
+        } finally {
+            if (activeRequest === requestId) setLoading(false);
+        }
+    };
+
+    onMount(() => void loadGroup(0));
+
+    const allLoadedSelected = createMemo(() => items().length > 0 && items().every(item => selected().has(item.id)));
+    const toggle = (id: string) => setSelected(current => {
+        const next = new Set(current);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+    });
+    const toggleLoaded = () => setSelected(current => {
+        const next = new Set(current);
+        if (allLoadedSelected()) items().forEach(item => next.delete(item.id));
+        else items().forEach(item => next.add(item.id));
+        return next;
+    });
+
+    const refreshCurrentOperations = async (currentGroup: OperationGroupRecord) => {
+        setSelected(new Set<string>());
+        const result = await loadOperations(currentGroup, 1, true);
+        if (result?.totalItems === 0) await loadGroup(offset());
+    };
+
+    const applySelection = async () => {
+        const currentGroup = group();
+        const ids = [...selected()];
+        if (!currentGroup || saving()) return;
+        if (!category()) {
+            toast.error("Выберите категорию");
+            return;
+        }
+        if (!ids.length) {
+            toast.error("Отметьте хотя бы одну операцию");
+            return;
+        }
+        setSaving(true);
+        setError("");
+        try {
+            await props.service.categorizeTransactions(ids, category());
+            toast.success(`Размечено операций: ${ids.length}`);
+            await refreshCurrentOperations(currentGroup);
+        } catch (reason) {
+            const message = reason instanceof Error ? reason.message : String(reason);
+            setError(message);
+            toast.error(`Не удалось разметить операции: ${message}`);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const createRule = async () => {
+        const currentGroup = group();
+        const selectedCategory = props.categories.find(item => item.id === category());
+        if (!currentGroup || saving()) return;
+        if (!selectedCategory) {
+            toast.error("Выберите категорию для правила");
+            return;
+        }
+        setSaving(true);
+        setError("");
+        try {
+            await props.service.createRecord("transaction_rules", rulePayload({
+                name: currentGroup.name,
+                match: currentGroup.name,
+                nature: currentGroup.transaction_type,
+                category: selectedCategory.id,
+                effectiveDate: "",
+                active: true,
+            }, selectedCategory));
+            toast.success("Правило создано и применено к истории");
+            await loadGroup(offset());
+        } catch (reason) {
+            const message = reason instanceof Error ? reason.message : String(reason);
+            setError(message);
+            toast.error(`Не удалось создать правило: ${message}`);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const skip = () => {
+        if (!saving()) void loadGroup(offset() + 1);
+    };
+
+    return (
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-sm" onClick={() => props.onClose()}>
+            <div class="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-white/60 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                <div class="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-[.18em] text-violet-600"><Sparkles size={15}/> Интерактивная разметка</div>
+                        <h2 class="mt-1 truncate text-xl font-semibold text-slate-900" title={group()?.name}>{group()?.name || (finished() ? "Группы закончились" : "Загрузка группы…")}</h2>
+                        <Show when={group()}>{(current) => (
+                            <p class="mt-1 text-xs text-slate-500">
+                                {current().transaction_type === "income" ? "Поступления" : "Расходы"} · {formatDate(current().first_date)} — {formatDate(current().last_date)}
+                            </p>
+                        )}</Show>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="hidden rounded-full bg-slate-100 px-3 py-1.5 text-xs tabular-nums text-slate-500 sm:inline">offset {offset()} · групп {totalGroups()}</span>
+                        <button class="flex size-9 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700" onClick={() => props.onClose()} aria-label="Закрыть"><X size={19}/></button>
+                    </div>
+                </div>
+
+                <Show when={error()}><div class="mx-5 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error()}</div></Show>
+
+                <Show when={!finished()} fallback={
+                    <div class="flex min-h-80 flex-col items-center justify-center gap-4 p-10 text-center">
+                        <span class="flex size-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600"><Check size={28}/></span>
+                        <div><h3 class="font-semibold text-slate-900">Все доступные группы пройдены</h3><p class="mt-1 text-sm text-slate-500">Можно начать сначала и вернуться к пропущенным группам.</p></div>
+                        <div class="flex gap-2"><button class="secondary-button" onClick={() => void loadGroup(0)}><RefreshCw size={15}/> Начать сначала</button><button class="primary-button" onClick={() => props.onClose()}>Готово</button></div>
+                    </div>
+                }>
+                    <Show when={!loading() && group()} fallback={
+                        <Show when={loading()} fallback={
+                            <div class="flex min-h-80 flex-col items-center justify-center gap-3 p-8 text-center">
+                                <p class="text-sm text-slate-500">Не удалось открыть следующую группу.</p>
+                                <button class="secondary-button" onClick={() => void loadGroup(offset())}><RefreshCw size={15}/> Повторить</button>
+                            </div>
+                        }><div class="flex min-h-80 items-center justify-center"><FaSolidSpinner class="animate-spin text-2xl text-violet-500"/></div></Show>
+                    }>
+                        <div class="flex flex-wrap items-center gap-3 border-b border-slate-100 bg-slate-50/80 px-5 py-3">
+                            <label class="min-w-56 flex-1">
+                                <span class="sr-only">Категория</span>
+                                <select class={inputClass} value={category()} onInput={(event) => setCategory(event.currentTarget.value)}>
+                                    <option value="">Выберите категорию…</option>
+                                    <For each={props.categories}>{(item) => <option value={item.id}>{item.name}</option>}</For>
+                                </select>
+                            </label>
+                            <button type="button" class="secondary-button" onClick={toggleLoaded} disabled={items().length === 0 || saving()}>
+                                <ListChecks size={16}/>{allLoadedSelected() ? "Снять выделение" : "Выбрать загруженные"}
+                            </button>
+                            <button type="button" class="flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50" disabled={!category() || saving()} onClick={() => void createRule()}>
+                                <WandSparkles size={16}/> Создать правило
+                            </button>
+                        </div>
+
+                        <div class="min-h-48 flex-1 overflow-auto">
+                            <Show when={items().length > 0} fallback={<div class="p-10 text-center text-sm text-slate-400">В группе больше нет неразмеченных операций.</div>}>
+                                <div class="divide-y divide-slate-100">
+                                    <For each={items()}>{(transaction) => (
+                                        <label class="flex cursor-pointer items-center gap-3 px-5 py-3 transition hover:bg-violet-50/40">
+                                            <input type="checkbox" checked={selected().has(transaction.id)} disabled={saving()} onChange={() => toggle(transaction.id)}/>
+                                            <span class="min-w-0 flex-1">
+                                                <span class="flex min-w-0 items-center gap-2"><span class="truncate text-sm font-medium text-slate-800">{transaction.note || "Без описания"}</span><span class="hidden shrink-0 text-xs text-slate-400 sm:inline">{formatDate(transaction.date, true)}</span></span>
+                                                <span class="block truncate text-xs text-slate-400">{props.accountLabel(transaction.account)}<span class="sm:hidden"> · {formatDate(transaction.date, true)}</span></span>
+                                            </span>
+                                            <span class="shrink-0 text-right"><span class={`block text-sm font-semibold tabular-nums ${transaction.amount >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{money.format(transaction.amount)}</span><span class="block text-[11px] text-slate-400">{transaction.currency}</span></span>
+                                        </label>
+                                    )}</For>
+                                </div>
+                                <LoadMoreSentinel
+                                    hasMore={pageState().page < pageState().totalPages}
+                                    loading={pageState().loading}
+                                    onLoad={() => { const current = group(); if (current) void loadOperations(current, pageState().page + 1); }}
+                                />
+                            </Show>
+                        </div>
+
+                        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
+                            <span class="text-xs text-slate-400">Показано {items().length} из {pageState().totalItems} · выбрано {selected().size}</span>
+                            <div class="flex flex-wrap justify-end gap-2">
+                                <button type="button" class="secondary-button" disabled={saving()} onClick={skip}><SkipForward size={16}/> Пропустить</button>
+                                <button type="button" class="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50" disabled={saving() || selected().size === 0 || !category()} onClick={() => void applySelection()}>
+                                    <Show when={!saving()} fallback={<FaSolidSpinner class="animate-spin"/>}><Check size={16}/></Show>
+                                    Разметить выбранные
+                                </button>
+                            </div>
+                        </div>
+                    </Show>
+                </Show>
+            </div>
+        </div>
+    );
+};
+
 export const AutomationPage: Component = () => {
     const standalone = useFullAppWindow();
     const [finbaseUrl] = useSetting("finbase-url");
@@ -397,6 +658,7 @@ export const AutomationPage: Component = () => {
     const [saving, setSaving] = createSignal(false);
     const [dialog, setDialog] = createSignal<RuleDraft | null>(null);
     const [groupDialog, setGroupDialog] = createSignal<OperationGroupRecord | null>(null);
+    const [interactiveGroups, setInteractiveGroups] = createSignal(false);
     const [activeTab, setActiveTab] = createSignal<AutomationTab>("transfers");
 
     const accountById = createMemo(() => new Map(accounts().map((item) => [item.id, item])));
@@ -551,21 +813,7 @@ export const AutomationPage: Component = () => {
         if (!api || !category) return;
         setSaving(true);
         try {
-            const payload = {
-                name: draft.name.trim(),
-                resource_type: "transaction" as const,
-                active: draft.active,
-                effective_date: draft.effectiveDate ? `${draft.effectiveDate}T00:00:00.000Z` : "",
-                conditions: [
-                    {condition_type: "transaction_name", operator: "like", value: draft.match.trim()},
-                    {condition_type: "transaction_type", operator: "=", value: draft.nature},
-                ],
-                actions: [{
-                    action_type: "set_transaction_category",
-                    value: category.name,
-                    value_ref: {type: "Category", id: category.id, name: category.name},
-                }],
-            };
+            const payload = rulePayload(draft, category);
             if (draft.id) await api.updateRecord("transaction_rules", draft.id, payload);
             else await api.createRecord("transaction_rules", payload);
             toast.success(draft.id ? "Правило обновлено" : "Правило создано и применено к истории");
@@ -733,9 +981,14 @@ export const AutomationPage: Component = () => {
                 <Show when={!loading()} fallback={<AutomationSkeleton/>}>
                     <Show when={activeTab() === "groups"}>
                     <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-                        <div class="border-b border-slate-100 px-5 py-4">
-                            <h2 class="font-semibold text-slate-900">Похожие операции без категории</h2>
-                            <p class="mt-1 text-xs text-slate-500">Создайте правило для всей подходящей истории или откройте группу и разметьте только выбранные операции.</p>
+                        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                            <div>
+                                <h2 class="font-semibold text-slate-900">Похожие операции без категории</h2>
+                                <p class="mt-1 text-xs text-slate-500">Создайте правило для всей подходящей истории или откройте группу и разметьте только выбранные операции.</p>
+                            </div>
+                            <button type="button" class="flex items-center gap-2 rounded-xl bg-violet-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-50" disabled={!groupsPage().totalItems} onClick={() => setInteractiveGroups(true)}>
+                                <Sparkles size={16}/> Разметить интерактивно
+                            </button>
                         </div>
                         <Show when={groups().length} fallback={<div class="p-8 text-center text-sm text-slate-400">Повторяющихся неразмеченных операций нет.</div>}>
                             <div class="divide-y divide-slate-100">
@@ -897,6 +1150,19 @@ export const AutomationPage: Component = () => {
                     />
                 )}</Show>
             )}</Show>
+            <Show when={interactiveGroups()}>
+                <Show when={service()}>{(api) => (
+                    <InteractiveGroupsDialog
+                        service={api()}
+                        categories={categories()}
+                        accountLabel={(accountId) => accountName(accountById().get(accountId))}
+                        onClose={() => {
+                            setInteractiveGroups(false);
+                            void load("groups");
+                        }}
+                    />
+                )}</Show>
+            </Show>
         </Show>
     );
 };

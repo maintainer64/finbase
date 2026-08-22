@@ -37,6 +37,12 @@ export type {
     UserRecord,
 } from "@/shared/finbase/models";
 
+export interface TransactionImportResult {
+    created: number;
+    skipped: number;
+    failures: {index: number; message: string}[];
+}
+
 // PocketBase принимает любой ISO 8601 (с Z или офсетом) и хранит в UTC; читает
 // в UTC. Нормализуем всё к полному ISO с временем, чтобы источник не мог
 // протолкнуть «голую» дату без времени.
@@ -314,6 +320,58 @@ export class FinbaseService implements ProviderSync {
             records.push(...page.items);
         }
         return records;
+    }
+
+    /** Идемпотентный импорт операций: существующие external_id пропускаются. */
+    async importTransactions(
+        transactions: Partial<TransactionRecord>[],
+        concurrency = 4,
+        onProgress?: (completed: number, total: number) => void,
+    ): Promise<TransactionImportResult> {
+        const externalIds = [...new Set(transactions.map(item => item.external_id?.trim()).filter(Boolean) as string[])];
+        const existing = new Set<string>();
+        for (let offset = 0; offset < externalIds.length; offset += 40) {
+            const batch = externalIds.slice(offset, offset + 40);
+            const filter = batch.map(id => `external_id = ${filterValue(id)}`).join(" || ");
+            const result = await this.listPage("transactions", 1, batch.length, {filter});
+            result.items.forEach(item => existing.add(item.external_id));
+        }
+
+        const seen = new Set(existing);
+        const queue: {index: number; transaction: Partial<TransactionRecord>}[] = [];
+        let skipped = 0;
+        transactions.forEach((transaction, index) => {
+            const externalId = transaction.external_id?.trim() ?? "";
+            if (externalId && seen.has(externalId)) {
+                skipped++;
+                return;
+            }
+            if (externalId) seen.add(externalId);
+            queue.push({index, transaction});
+        });
+
+        let next = 0;
+        let completed = skipped;
+        let created = 0;
+        const failures: TransactionImportResult["failures"] = [];
+        onProgress?.(completed, transactions.length);
+        const worker = async () => {
+            while (next < queue.length) {
+                const item = queue[next++];
+                try {
+                    await this.createRecord("transactions", item.transaction);
+                    created++;
+                } catch (reason) {
+                    failures.push({index: item.index, message: reason instanceof Error ? reason.message : String(reason)});
+                } finally {
+                    completed++;
+                    onProgress?.(completed, transactions.length);
+                }
+            }
+        };
+        await Promise.all(Array.from({length: Math.min(concurrency, queue.length)}, () => worker()));
+        failures.sort((a, b) => a.index - b.index);
+        return {created, skipped, failures};
     }
 
     async getTransactionRules(): Promise<TransactionRuleRecord[]> {
