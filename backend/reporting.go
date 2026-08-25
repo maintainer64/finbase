@@ -28,9 +28,19 @@ func reportingTimezoneOffset() string {
 	return value
 }
 
-// configureReportingTimezone обновляет отчётные view и на уже существующей
-// базе: применяет часовой пояс и исключает подтверждённые внутренние переводы.
-func configureReportingTimezone(app core.App) error {
+// configureReporting обновляет отчётную схему и view на уже существующей базе.
+func configureReporting(app core.App) error {
+	categories, err := app.FindCollectionByNameOrId("categories")
+	if err != nil {
+		return err
+	}
+	if categories.Fields.GetByName("excluded_from_reports") == nil {
+		categories.Fields.Add(&core.BoolField{Name: "excluded_from_reports"})
+		if err := app.Save(categories); err != nil {
+			return fmt.Errorf("add categories.excluded_from_reports: %w", err)
+		}
+	}
+
 	offset := reportingTimezoneOffset()
 	day := func(column string) string { return fmt.Sprintf("date(%s, '%s')", column, offset) }
 

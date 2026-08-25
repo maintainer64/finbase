@@ -289,6 +289,9 @@ func upgradeExistingSchema(app core.App, authRule *string) error {
 	if relation, ok := categories.Fields.GetByName("parent_category").(*core.RelationField); ok {
 		relation.CascadeDelete = false
 	}
+	if categories.Fields.GetByName("excluded_from_reports") == nil {
+		categories.Fields.Add(&core.BoolField{Name: "excluded_from_reports"})
+	}
 	categories.RemoveIndex("idx_categories_parent")
 	categories.RemoveIndex("idx_categories_parent_category")
 	categories.AddIndex("idx_categories_parent_category", false, "parent_category", "")
@@ -403,6 +406,7 @@ func init() {
 			&core.TextField{Name: "name", Required: true, Max: 200},
 			&core.TextField{Name: "color", Max: 7},
 			&core.TextField{Name: "lucide_icon", Max: 100},
+			&core.BoolField{Name: "excluded_from_reports"},
 		)
 		categories.AddIndex("idx_categories_name", true, "name", "")
 		if err := app.Save(categories); err != nil {

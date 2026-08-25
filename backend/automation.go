@@ -148,8 +148,8 @@ func registerAutomation(app *pocketbase.PocketBase) {
 		if err := categorizeExistingAcceptedTransfers(e.App); err != nil {
 			return fmt.Errorf("categorize existing Finbase transfers: %w", err)
 		}
-		if err := configureReportingTimezone(e.App); err != nil {
-			return fmt.Errorf("configure Finbase reporting timezone: %w", err)
+		if err := configureReporting(e.App); err != nil {
+			return fmt.Errorf("configure Finbase reporting: %w", err)
 		}
 		if err := recalculateAllAccountBalances(e.App); err != nil {
 			return fmt.Errorf("recalculate Finbase balances: %w", err)

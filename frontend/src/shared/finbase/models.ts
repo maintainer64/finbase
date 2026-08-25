@@ -44,6 +44,7 @@ export interface CategoryRecord extends PocketBaseRecord {
     color: string;
     parent_category: string;
     lucide_icon: string;
+    excluded_from_reports: boolean;
 }
 
 export interface TagRecord extends PocketBaseRecord {

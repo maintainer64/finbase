@@ -3,11 +3,11 @@ import {FaSolidDatabase, FaSolidPen, FaSolidPlus, FaSolidSpinner, FaSolidTrash, 
 import {toast} from "solid-toast";
 import {useSetting} from "@/shared/settings";
 import {FinbaseService} from "@/shared/providers/services/finbase/finbase-service";
-import {PocketBaseRecord, WritableRecord} from "@/shared/finbase/models";
+import {PocketBaseRecord, TransactionRecord, WritableRecord} from "@/shared/finbase/models";
 import {COLLECTIONS, CollectionSpec, FieldSpec} from "./finbase-schema";
 import {MultiSelect} from "@/pages/statistics/multi-select";
 import {CategoryIcon, CategoryIconPicker} from "@/components/ui/category-icon";
-import {ArrowDown, ArrowUp, ArrowUpDown, Download, FileUp, Maximize2, RotateCcw, Search} from "lucide-solid";
+import {ArrowDown, ArrowUp, ArrowUpDown, Download, FileUp, Maximize2, RefreshCw, RotateCcw, Search} from "lucide-solid";
 import {openFinbaseTab, useFullAppWindow} from "@/shared/open-finbase";
 import {buildDataFilter, EMPTY_RELATION_FILTER} from "./data-filter";
 import {parseTransactionCsv, type TransactionCsvIssue, type TransactionCsvPreview} from "./transaction-csv";
@@ -16,16 +16,21 @@ import {DatePicker} from "@/components/ui/date-picker";
 import {SearchableSelect} from "@/components/ui/searchable-select";
 import {formatDateOnly, toDateTimeValue, toDateValue} from "@/shared/date";
 import {DateTimePicker} from "@/components/ui/date-time-picker";
+import {manualTransactionExternalId} from "@/shared/finbase/manual-transaction";
+import {RelationOption, TransactionRelationInput} from "./transaction-relation-input";
 
 type UiRecord = PocketBaseRecord & Record<string, unknown>;
 
-type RelOptions = Map<string, {id: string; label: string; color?: string; icon?: string}[]>;
+type RelOptions = Map<string, RelationOption[]>;
 
 interface FieldInputProps {
     field: FieldSpec;
     value: unknown;
-    options: {id: string; label: string; color?: string; icon?: string}[];
+    options: RelationOption[];
     onChange: (value: unknown) => void;
+    actionLabel?: string;
+    onAction?: () => void;
+    hint?: string;
 }
 
 const FieldInput: Component<FieldInputProps> = (props) => {
@@ -54,6 +59,27 @@ const FieldInput: Component<FieldInputProps> = (props) => {
                         onInput={(e) => props.onChange(e.currentTarget.value)}
                     />
                 );
+            case "boolean": {
+                const enabled = Boolean(props.value);
+                return (
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked={enabled}
+                        class={`flex min-h-10 w-full items-center gap-3 rounded-xl border px-3 py-2 text-left text-sm transition ${
+                            enabled
+                                ? "border-amber-200 bg-amber-50 text-amber-800"
+                                : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                        }`}
+                        onClick={() => props.onChange(!enabled)}
+                    >
+                        <span class={`relative h-5 w-9 shrink-0 rounded-full transition ${enabled ? "bg-amber-500" : "bg-slate-200"}`}>
+                            <span class={`absolute top-0.5 size-4 rounded-full bg-white shadow-sm transition ${enabled ? "left-[18px]" : "left-0.5"}`}/>
+                        </span>
+                        <span>{enabled ? "Исключена из отчётов" : "Учитывается в отчётах"}</span>
+                    </button>
+                );
+            }
             case "color":
                 return (
                     <div class="flex items-center gap-2">
@@ -140,7 +166,19 @@ const FieldInput: Component<FieldInputProps> = (props) => {
                     <span class="text-red-500"> *</span>
                 </Show>
             </span>
-            {render()}
+            <div class="flex items-start gap-2">
+                <div class="min-w-0 flex-1">{render()}</div>
+                <Show when={props.actionLabel && props.onAction}>
+                    <button
+                        type="button"
+                        class="flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                        onClick={() => props.onAction?.()}
+                    >
+                        <RefreshCw size={14}/>{props.actionLabel}
+                    </button>
+                </Show>
+            </div>
+            <Show when={props.hint}><span class="text-[11px] leading-4 text-slate-400">{props.hint}</span></Show>
         </label>
     );
 };
@@ -150,16 +188,22 @@ interface FormModalProps {
     record: UiRecord | null;
     relationOptions: RelOptions;
     saving: boolean;
+    service: FinbaseService;
+    defaults?: Record<string, unknown>;
     onSave: (payload: Record<string, unknown>) => void;
     onDelete: () => void;
     onClose: () => void;
 }
 
 const RecordFormModal: Component<FormModalProps> = (props) => {
+    let manualUuid = crypto.randomUUID();
+    let autoExternalId = untrack(() => !props.record && props.spec.collection === "transactions");
+    let autoCurrency = autoExternalId;
+    let lastGeneratedExternalId = "";
     const [values, setValues] = createSignal<Record<string, unknown>>(untrack(() => {
         const record = props.record;
-        return record
-            ? Object.fromEntries(props.spec.fields.map((field) => {
+        if (record) {
+            return Object.fromEntries(props.spec.fields.map((field) => {
                 const raw = record[field.name];
                 if (field.kind === "date") {
                     return [field.name, field.includeTime
@@ -168,12 +212,107 @@ const RecordFormModal: Component<FormModalProps> = (props) => {
                 }
                 if (field.kind === "relation-many") return [field.name, Array.isArray(raw) ? raw : []];
                 return [field.name, raw ?? ""];
-            }))
-            : {};
+            }));
+        }
+        const defaults: Record<string, unknown> = props.spec.collection === "transactions"
+            ? {date: toDateTimeValue(new Date().toISOString()), amount: "", currency: "RUB", tags: []}
+            : props.spec.collection === "transfers"
+                ? {status: "pending"}
+                : props.spec.collection === "accounts"
+                    ? {type: "checking", currency: "RUB"}
+                    : {};
+        Object.assign(defaults, props.defaults ?? {});
+        if (props.spec.collection === "transactions") {
+            const account = props.relationOptions.get("accounts")?.find(item => item.id === String(defaults.account ?? ""));
+            lastGeneratedExternalId = manualTransactionExternalId({provider_code: account?.providerCode ?? ""}, manualUuid);
+            defaults.external_id = lastGeneratedExternalId;
+        }
+        return defaults;
     }));
+    const [quickCreate, setQuickCreate] = createSignal<{field: string; nature: "income" | "expense"} | null>(null);
+    const [quickSaving, setQuickSaving] = createSignal(false);
+    const [createdTransactions, setCreatedTransactions] = createSignal<RelationOption[]>([]);
 
     const setValue = (name: string, value: unknown) => {
         setValues((prev) => ({...prev, [name]: value}));
+    };
+
+    const transactionOptions = createMemo(() => {
+        const byId = new Map((props.relationOptions.get("transactions") ?? []).map(item => [item.id, item]));
+        for (const item of createdTransactions()) byId.set(item.id, item);
+        return [...byId.values()];
+    });
+
+    createEffect(() => {
+        if (props.record || props.spec.collection !== "transactions") return;
+        const accountId = String(values().account ?? "");
+        const account = props.relationOptions.get("accounts")?.find(item => item.id === accountId);
+        const nextExternalId = manualTransactionExternalId({provider_code: account?.providerCode ?? ""}, manualUuid);
+        const current = values();
+        const patch: Record<string, unknown> = {};
+        if (autoExternalId && current.external_id !== nextExternalId) {
+            lastGeneratedExternalId = nextExternalId;
+            patch.external_id = nextExternalId;
+        }
+        if (autoCurrency && account?.currency && current.currency !== account.currency) {
+            patch.currency = account.currency;
+        }
+        if (Object.keys(patch).length) setValues(previous => ({...previous, ...patch}));
+    });
+
+    const regenerateExternalId = () => {
+        manualUuid = crypto.randomUUID();
+        autoExternalId = true;
+        const accountId = String(values().account ?? "");
+        const account = props.relationOptions.get("accounts")?.find(item => item.id === accountId);
+        lastGeneratedExternalId = manualTransactionExternalId({provider_code: account?.providerCode ?? ""}, manualUuid);
+        setValue("external_id", lastGeneratedExternalId);
+    };
+
+    const quickDefaults = createMemo<Record<string, unknown>>(() => {
+        const current = quickCreate();
+        if (!current) return {};
+        const counterpartField = current.nature === "income" ? "outflow_transaction" : "inflow_transaction";
+        const counterpart = transactionOptions().find(item => item.id === String(values()[counterpartField] ?? ""));
+        return {
+            date: counterpart?.date ? toDateTimeValue(counterpart.date) : toDateTimeValue(new Date().toISOString()),
+            amount: counterpart?.amount === undefined ? "" : Math.abs(counterpart.amount),
+            currency: counterpart?.currency || "RUB",
+            note: "Перевод",
+        };
+    });
+
+    const createQuickTransaction = async (payload: Record<string, unknown>) => {
+        const current = quickCreate();
+        if (!current) return;
+        const amount = Math.abs(Number(payload.amount));
+        if (!Number.isFinite(amount) || amount <= 0) {
+            toast.error("Для перевода укажите сумму больше нуля");
+            return;
+        }
+        setQuickSaving(true);
+        try {
+            const transaction = await props.service.createRecord("transactions", {
+                ...payload,
+                amount: current.nature === "income" ? amount : -amount,
+            } as Partial<TransactionRecord>);
+            setCreatedTransactions(items => [...items, {
+                id: transaction.id,
+                label: transaction.note || "Без описания",
+                account: transaction.account,
+                amount: transaction.amount,
+                currency: transaction.currency,
+                date: transaction.date,
+                externalId: transaction.external_id,
+            }]);
+            setValue(current.field, transaction.id);
+            setQuickCreate(null);
+            toast.success(current.nature === "income" ? "Поступление создано" : "Расход создан");
+        } catch (cause) {
+            toast.error(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+            setQuickSaving(false);
+        }
     };
 
     const submit = () => {
@@ -212,7 +351,10 @@ const RecordFormModal: Component<FormModalProps> = (props) => {
     };
 
     return (
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" onClick={() => props.onClose()}>
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" onClick={(event) => {
+            event.stopPropagation();
+            props.onClose();
+        }}>
             <div
                 class="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-white/70 bg-white p-6 shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
@@ -228,14 +370,45 @@ const RecordFormModal: Component<FormModalProps> = (props) => {
 
                 <div class="flex flex-col gap-3">
                     <For each={props.spec.fields}>
-                        {(field) => (
-                            <FieldInput
-                                field={field}
-                                value={values()[field.name]}
-                                options={field.relation ? props.relationOptions.get(field.relation) ?? [] : []}
-                                onChange={(v) => setValue(field.name, v)}
-                            />
-                        )}
+                        {(field) => {
+                            const transferNature = field.name === "inflow_transaction"
+                                ? "income"
+                                : field.name === "outflow_transaction" ? "expense" : null;
+                            return (
+                                <Show when={props.spec.collection === "transfers" && transferNature} fallback={
+                                    <FieldInput
+                                        field={field}
+                                        value={values()[field.name]}
+                                        options={field.relation
+                                            ? field.relation === "transactions" ? transactionOptions() : props.relationOptions.get(field.relation) ?? []
+                                            : []}
+                                        onChange={(value) => {
+                                            if (field.name === "external_id") autoExternalId = String(value) === lastGeneratedExternalId;
+                                            if (field.name === "currency") autoCurrency = false;
+                                            setValue(field.name, value);
+                                        }}
+                                        actionLabel={!props.record && field.name === "external_id" && props.spec.collection === "transactions" ? "Новый UUID" : undefined}
+                                        onAction={!props.record && field.name === "external_id" && props.spec.collection === "transactions" ? regenerateExternalId : undefined}
+                                        hint={!props.record && field.name === "external_id" && props.spec.collection === "transactions"
+                                            ? "Для ручной операции: provider_manual_uuid. Значение можно изменить."
+                                            : undefined}
+                                    />
+                                }>
+                                    <label class="flex flex-col gap-1">
+                                        <span class="text-xs text-gray-500">{field.label}<span class="text-red-500"> *</span></span>
+                                        <TransactionRelationInput
+                                            service={props.service}
+                                            value={String(values()[field.name] ?? "")}
+                                            nature={transferNature!}
+                                            transactions={transactionOptions()}
+                                            accounts={props.relationOptions.get("accounts") ?? []}
+                                            onChange={(value) => setValue(field.name, value)}
+                                            onCreate={() => setQuickCreate({field: field.name, nature: transferNature!})}
+                                        />
+                                    </label>
+                                </Show>
+                            );
+                        }}
                     </For>
                 </div>
 
@@ -260,6 +433,19 @@ const RecordFormModal: Component<FormModalProps> = (props) => {
                     </Show>
                 </div>
             </div>
+            <Show when={quickCreate()}>
+                <RecordFormModal
+                    spec={COLLECTIONS.find(item => item.collection === "transactions")!}
+                    record={null}
+                    relationOptions={props.relationOptions}
+                    saving={quickSaving()}
+                    service={props.service}
+                    defaults={quickDefaults()}
+                    onSave={(payload) => void createQuickTransaction(payload)}
+                    onDelete={() => undefined}
+                    onClose={() => { if (!quickSaving()) setQuickCreate(null); }}
+                />
+            </Show>
         </div>
     );
 };
@@ -302,7 +488,12 @@ const CellValue: Component<CellValueProps> = (props) => {
             <Show when={props.field.kind === "icon" && !raw()}>
                 <span class="text-slate-300">—</span>
             </Show>
-            <Show when={props.field.kind !== "icon"}>
+            <Show when={props.field.kind === "boolean"}>
+                <span class={`rounded-full px-2 py-0.5 text-[11px] font-medium ${raw() ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>
+                    {raw() ? "Не учитывается" : "Учитывается"}
+                </span>
+            </Show>
+            <Show when={props.field.kind !== "icon" && props.field.kind !== "boolean"}>
             <span class={`truncate max-w-48 tabular-nums ${
                 ["amount", "balance"].includes(props.field.name)
                     ? Number(raw() ?? 0) > 0 ? "font-semibold text-emerald-700" : Number(raw() ?? 0) < 0 ? "font-semibold text-rose-600" : "text-slate-400"
@@ -379,7 +570,8 @@ export const DataPage: Component = () => {
         const requestId = ++optionsRequestId;
         const needsOptions = [...new Set(coll.fields
             .filter((f) => f.relation)
-            .map((f) => f.relation!))];
+            .map((f) => f.relation!)
+            .concat(coll.collection === "transfers" ? ["accounts", "categories", "tags"] : []))];
         try {
             const optionGroups = await Promise.all(needsOptions.map((rel) => {
                 if (rel === "users") {
@@ -400,7 +592,7 @@ export const DataPage: Component = () => {
                     rel,
                     items: items.map((record) => {
                         const item = record as unknown as UiRecord;
-                        return {
+                        const relationOption: RelationOption = {
                             id: item.id,
                             label: String(item[relSpec.displayField] ?? item.id),
                             color: typeof item.color === "string" ? item.color : undefined,
@@ -408,11 +600,23 @@ export const DataPage: Component = () => {
                                 ? String(item.lucide_icon ?? item.icon)
                                 : undefined,
                         };
+                        if (rel === "accounts") {
+                            relationOption.providerCode = String(item.provider_code ?? "");
+                            relationOption.currency = String(item.currency ?? "");
+                        }
+                        if (rel === "transactions") {
+                            relationOption.account = String(item.account ?? "");
+                            relationOption.amount = Number(item.amount ?? 0);
+                            relationOption.currency = String(item.currency ?? "");
+                            relationOption.date = String(item.date ?? "");
+                            relationOption.externalId = String(item.external_id ?? "");
+                        }
+                        return relationOption;
                     }),
                 }));
             }));
             if (requestId !== optionsRequestId) return;
-            const options = new Map<string, {id: string; label: string; color?: string; icon?: string}[]>();
+            const options = new Map<string, RelationOption[]>();
             for (const group of optionGroups) options.set(group.rel, group.items);
             setRelationOptions(options);
         } catch (cause) {
@@ -529,7 +733,9 @@ export const DataPage: Component = () => {
         setSaving(true);
         const operation = editing
             ? service.updateRecord(coll.collection, editing.id, payload as Partial<WritableRecord>)
-            : service.createRecord(coll.collection, payload as Partial<WritableRecord>);
+            : coll.collection === "transfers"
+                ? service.saveTransfer(payload)
+                : service.createRecord(coll.collection, payload as Partial<WritableRecord>);
         operation
             .then(() => {
                 toast.success(editing ? "Запись обновлена" : "Запись создана");
@@ -870,15 +1076,18 @@ export const DataPage: Component = () => {
             </Show>
 
             <Show when={modal()}>
-                <RecordFormModal
-                    spec={spec()}
-                    record={modal()?.record ?? null}
-                    relationOptions={relationOptions()}
-                    saving={saving()}
-                    onSave={save}
-                    onDelete={remove}
-                    onClose={() => setModal(null)}
-                />
+                <Show when={finbase()}>{(service) => (
+                    <RecordFormModal
+                        spec={spec()}
+                        record={modal()?.record ?? null}
+                        relationOptions={relationOptions()}
+                        saving={saving()}
+                        service={service()}
+                        onSave={save}
+                        onDelete={remove}
+                        onClose={() => setModal(null)}
+                    />
+                )}</Show>
             </Show>
             <Show when={csvDialog()}>{(current) => (
                 <TransactionCsvDialog

@@ -180,4 +180,50 @@ describe("Finbase integration (живой PocketBase)", () => {
         expect(saved).toContain("20:30:00");
         expect(saved).toContain("Z");
     });
+
+    it("ищет ручные операции и сохраняет найденную автодетектором пару", async () => {
+        const runId = Date.now().toString();
+        const sourceDomain = `manual-source-${runId}`;
+        const targetDomain = `manual-target-${runId}`;
+        const service = new FinbaseService(BASE_URL, token);
+        await service.createAccountsIfNotExists([makeAccount(sourceDomain), makeAccount(targetDomain)]);
+        const accounts = await service.getAccountsList();
+        const source = accounts.find(account => account.external_id === sourceDomain);
+        const target = accounts.find(account => account.external_id === targetDomain);
+        expect(source).toBeTruthy();
+        expect(target).toBeTruthy();
+
+        const date = "2026-08-25T10:00:00.000Z";
+        const outflow = await service.createRecord("transactions", {
+            account: source!.id,
+            category: "",
+            tags: [],
+            date,
+            amount: -777,
+            currency: "RUB",
+            note: `Ручной перевод ${runId}`,
+            external_id: `test_manual_out_${runId}`,
+        });
+        const inflow = await service.createRecord("transactions", {
+            account: target!.id,
+            category: "",
+            tags: [],
+            date,
+            amount: 777,
+            currency: "RUB",
+            note: `Ручной перевод ${runId}`,
+            external_id: `test_manual_in_${runId}`,
+        });
+
+        const found = await service.searchTransactions(runId, "income");
+        expect(found.map(item => item.id)).toContain(inflow.id);
+
+        const transfer = await service.saveTransfer({
+            inflow_transaction: inflow.id,
+            outflow_transaction: outflow.id,
+            status: "accepted",
+            notes: "Создано из интерфейса",
+        });
+        expect(transfer.status).toBe("accepted");
+    });
 });

@@ -112,12 +112,19 @@ describe("Финансовая статистика (view-коллекции)", 
         const catRes = await pbRequest("collections/categories/records", {
             method: "POST",
             token,
-            body: JSON.stringify({name: `Категория-${runId}`, color: "#4caf50", lucide_icon: "tag"}),
+            body: JSON.stringify({
+                name: `Категория-${runId}`,
+                color: "#4caf50",
+                lucide_icon: "tag",
+                excluded_from_reports: true,
+            }),
         });
         expect(catRes.ok).toBe(true);
         const catId = catRes.json.id;
 
         const service = new FinbaseService(BASE_URL, token);
+        const savedCategory = (await service.getCategories()).find(item => item.id === catId);
+        expect(savedCategory?.excluded_from_reports).toBe(true);
         await service.createAccountsIfNotExists([account(domain)]);
         const acc = (await service.getAccountsList()).find(a => a.external_id === domain);
         expect(acc).toBeTruthy();

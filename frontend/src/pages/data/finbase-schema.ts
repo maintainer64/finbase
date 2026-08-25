@@ -2,7 +2,7 @@
 // набора типов данных: только подписи и способ отображения конкретного PB-поля.
 import {WritableCollectionName} from "@/shared/finbase/models";
 
-export type FieldKind = "text" | "textarea" | "number" | "date" | "select" | "relation" | "relation-many" | "color" | "icon";
+export type FieldKind = "text" | "textarea" | "number" | "boolean" | "date" | "select" | "relation" | "relation-many" | "color" | "icon";
 
 export interface FieldSpec {
     name: string;
@@ -56,6 +56,7 @@ export const COLLECTIONS: CollectionSpec[] = [
             {name: "color", label: "Цвет", kind: "color", listable: true},
             {name: "parent_category", label: "Родительская", kind: "relation", relation: "categories", listable: true},
             {name: "lucide_icon", label: "Lucide", kind: "icon", listable: true},
+            {name: "excluded_from_reports", label: "Не учитывать в отчётах", kind: "boolean", listable: true},
         ],
     },
     {

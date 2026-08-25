@@ -40,6 +40,7 @@ import {STATISTICS_PERIODS as PERIODS, statisticsRangeFromParams} from "./statis
 import {DatePicker} from "@/components/ui/date-picker";
 import {SearchableSelect} from "@/components/ui/searchable-select";
 import {formatMoney as fmtMoney} from "./money";
+import {excludedReportCategoryIds} from "./category-reporting";
 
 // ==================== Утилиты ====================
 
@@ -117,6 +118,7 @@ const UNCATEGORIZED_CATEGORY: CategoryRecord = {
     color: "#94a3b8",
     parent_category: "",
     lucide_icon: "circle-help",
+    excluded_from_reports: false,
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -596,9 +598,13 @@ export const StatisticsPage: Component = () => {
         setDrillLevel(null);
     });
 
+    const excludedDonutCategoryIds = createMemo(() => excludedReportCategoryIds(categories()));
+
     const categoryTree = createMemo(() => {
         const children = new Map<string, CategoryRecord[]>();
+        const excluded = excludedDonutCategoryIds();
         for (const cat of categories()) {
+            if (excluded.has(cat.id)) continue;
             const parent = cat.parent_category || "";
             if (!children.has(parent)) children.set(parent, []);
             children.get(parent)!.push(cat);
@@ -609,13 +615,14 @@ export const StatisticsPage: Component = () => {
     const categoryBreakdown = createMemo(() => {
         const q = query();
         const level = drillLevel();
+        const excluded = excludedDonutCategoryIds();
         const children = categoryTree().get(level ?? "");
         // на текущем уровне показываем: при активном фильтре — выбранные категории,
         // иначе — прямых детей текущего уровня (или верхнеуровневые на корне)
         const shown = q.categories.length && !level
             ? q.categories
                 .map(id => id === WITHOUT_CATEGORY ? UNCATEGORIZED_CATEGORY : categoryMap().get(id))
-                .filter((c): c is CategoryRecord => Boolean(c))
+                .filter((c): c is CategoryRecord => Boolean(c) && !excluded.has(c!.id))
             : level
                 ? children ?? []
                 : [...(children ?? []), UNCATEGORIZED_CATEGORY];
@@ -625,6 +632,7 @@ export const StatisticsPage: Component = () => {
         const ancestors = categoryAncestors();
         const byCat = new Map<string, {income: number; expense: number}>();
         for (const s of filteredSplits()) {
+            if (s.category && excluded.has(s.category)) continue;
             // относим операцию к ближайшему показанному предку, чтобы суммы детей уходили в родителей
             const own = !s.category
                 ? (shownIds.has(WITHOUT_CATEGORY) ? WITHOUT_CATEGORY : undefined)

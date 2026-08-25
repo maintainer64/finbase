@@ -322,6 +322,53 @@ export class FinbaseService implements ProviderSync {
         return records;
     }
 
+    /** Серверный поиск для relation-полей перевода — без загрузки всей истории. */
+    async searchTransactions(
+        query: string,
+        nature: "income" | "expense",
+        matchingAccountIds: string[] = [],
+        perPage = 40,
+    ): Promise<TransactionRecord[]> {
+        const filters = [nature === "income" ? "amount > 0" : "amount < 0"];
+        const needle = query.trim();
+        if (needle) {
+            const matches = [
+                `note ~ ${filterValue(needle)}`,
+                `external_id ~ ${filterValue(needle)}`,
+                ...matchingAccountIds.map(id => `account = ${filterValue(id)}`),
+            ];
+            const numeric = Number(needle.replace(/\s/g, "").replace(",", "."));
+            if (Number.isFinite(numeric)) {
+                const amount = nature === "income" ? Math.abs(numeric) : -Math.abs(numeric);
+                matches.push(`amount = ${amount}`);
+            }
+            filters.push(`(${matches.join(" || ")})`);
+        }
+        const result = await this.listPage("transactions", 1, perPage, {
+            filter: filters.join(" && "),
+            sort: "-date",
+        });
+        return result.items;
+    }
+
+    /**
+     * Автодетектор может успеть создать pending-пару между быстрым созданием
+     * двух операций и сохранением формы. В этом случае используем найденную
+     * запись, а не падаем на уникальном индексе.
+     */
+    async saveTransfer(data: Partial<TransferRecord>): Promise<TransferRecord> {
+        const inflow = data.inflow_transaction?.trim();
+        const outflow = data.outflow_transaction?.trim();
+        if (inflow && outflow) {
+            const existing = await this.find(
+                "transfers",
+                `inflow_transaction = ${filterValue(inflow)} && outflow_transaction = ${filterValue(outflow)}`,
+            );
+            if (existing) return this.updateRecord("transfers", existing.id, data);
+        }
+        return this.createRecord("transfers", data);
+    }
+
     /** Идемпотентный импорт операций: существующие external_id пропускаются. */
     async importTransactions(
         transactions: Partial<TransactionRecord>[],

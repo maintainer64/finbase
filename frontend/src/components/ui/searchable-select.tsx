@@ -1,10 +1,11 @@
-import {Check, ChevronDown, Search, X} from "lucide-solid";
+import {Check, ChevronDown, LoaderCircle, Plus, Search, X} from "lucide-solid";
 import {Component, createMemo, createSignal, For, onCleanup, onMount, Show, untrack} from "solid-js";
 import {CategoryIcon} from "@/components/ui/category-icon";
 
 export interface SelectOption {
     value: string;
     label: string;
+    description?: string;
     color?: string;
     icon?: string;
 }
@@ -19,6 +20,11 @@ interface SearchableSelectProps {
     class?: string;
     disabled?: boolean;
     clearable?: boolean;
+    loading?: boolean;
+    emptyText?: string;
+    onSearch?: (query: string) => void;
+    actionLabel?: string;
+    onAction?: () => void;
 }
 
 export const SearchableSelect: Component<SearchableSelectProps> = (props) => {
@@ -31,12 +37,13 @@ export const SearchableSelect: Component<SearchableSelectProps> = (props) => {
     const filtered = createMemo(() => {
         const needle = query().trim().toLocaleLowerCase("ru-RU");
         if (!needle) return props.options;
-        return props.options.filter((option) => option.label.toLocaleLowerCase("ru-RU").includes(needle));
+        return props.options.filter((option) => `${option.label} ${option.description ?? ""}`.toLocaleLowerCase("ru-RU").includes(needle));
     });
 
     const show = () => {
         if (props.disabled) return;
         setQuery("");
+        props.onSearch?.("");
         setOpen(true);
         queueMicrotask(() => untrack(searchInput)?.focus());
     };
@@ -76,7 +83,10 @@ export const SearchableSelect: Component<SearchableSelectProps> = (props) => {
                         <span class="flex min-w-0 flex-1 items-center gap-2">
                             <Show when={option().color}><span class="size-2.5 shrink-0 rounded-full" style={{background: option().color}}/></Show>
                             <Show when={option().icon}><CategoryIcon name={option().icon} size={15} class="shrink-0 text-slate-500"/></Show>
-                            <span class="truncate">{option().label}</span>
+                            <span class="min-w-0 flex-1">
+                                <span class="block truncate">{option().label}</span>
+                                <Show when={option().description}><span class="block truncate text-[11px] text-slate-400">{option().description}</span></Show>
+                            </span>
                         </span>
                     )}
                 </Show>
@@ -105,7 +115,11 @@ export const SearchableSelect: Component<SearchableSelectProps> = (props) => {
                             class="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-8 pr-3 text-sm outline-none focus:border-blue-400 focus:bg-white"
                             value={query()}
                             placeholder={props.searchPlaceholder ?? "Найти…"}
-                            onInput={(event) => setQuery(event.currentTarget.value)}
+                            onInput={(event) => {
+                                const value = event.currentTarget.value;
+                                setQuery(value);
+                                props.onSearch?.(value);
+                            }}
                         />
                     </label>
                     <div class="max-h-64 overflow-y-auto" role="listbox">
@@ -115,7 +129,10 @@ export const SearchableSelect: Component<SearchableSelectProps> = (props) => {
                                 <Show when={!props.value}><Check size={15} class="text-blue-500"/></Show>
                             </button>
                         </Show>
-                        <For each={filtered()} fallback={<div class="px-3 py-6 text-center text-sm text-slate-400">Ничего не найдено</div>}>
+                        <Show when={props.loading}>
+                            <div class="flex items-center justify-center gap-2 px-3 py-3 text-xs text-slate-400"><LoaderCircle size={14} class="animate-spin"/> Ищем…</div>
+                        </Show>
+                        <For each={filtered()} fallback={<Show when={!props.loading}><div class="px-3 py-6 text-center text-sm text-slate-400">{props.emptyText ?? "Ничего не найдено"}</div></Show>}>
                             {(option) => (
                                 <button
                                     type="button"
@@ -126,12 +143,27 @@ export const SearchableSelect: Component<SearchableSelectProps> = (props) => {
                                 >
                                     <Show when={option.color}><span class="size-2.5 shrink-0 rounded-full" style={{background: option.color}}/></Show>
                                     <Show when={option.icon}><CategoryIcon name={option.icon} size={15} class="shrink-0 text-slate-500"/></Show>
-                                    <span class="min-w-0 flex-1 truncate">{option.label}</span>
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block truncate">{option.label}</span>
+                                        <Show when={option.description}><span class="block truncate text-[11px] text-slate-400">{option.description}</span></Show>
+                                    </span>
                                     <Show when={props.value === option.value}><Check size={15} class="shrink-0 text-blue-500"/></Show>
                                 </button>
                             )}
                         </For>
                     </div>
+                    <Show when={props.actionLabel && props.onAction}>
+                        <button
+                            type="button"
+                            class="mt-1 flex w-full items-center gap-2 border-t border-slate-100 px-2.5 pt-2 pb-1 text-left text-sm font-medium text-blue-600 hover:text-blue-700"
+                            onClick={() => {
+                                setOpen(false);
+                                props.onAction?.();
+                            }}
+                        >
+                            <Plus size={15}/>{props.actionLabel}
+                        </button>
+                    </Show>
                 </div>
             </Show>
         </div>

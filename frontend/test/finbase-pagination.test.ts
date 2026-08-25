@@ -2,6 +2,7 @@ import {afterEach, describe, expect, it, vi} from "vitest";
 import {FinbaseService} from "@/shared/providers/services/finbase/finbase-service";
 import {buildDataFilter} from "@/pages/data/data-filter";
 import {COLLECTIONS} from "@/pages/data/finbase-schema";
+import {manualTransactionExternalId} from "@/shared/finbase/manual-transaction";
 
 const token = "aaa.bbb.ccc";
 
@@ -133,6 +134,61 @@ describe("пагинация Finbase", () => {
             expect(new URL(String(input)).pathname).toMatch(/\/collections\/transactions\/records\/transaction-[12]$/);
             expect(JSON.parse(String(init?.body))).toEqual({category: "category-1"});
         }
+    });
+
+    it("ищет операции перевода на сервере по направлению, сумме и счёту", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
+            page: 1,
+            perPage: 40,
+            totalItems: 0,
+            totalPages: 0,
+            items: [],
+        }), {status: 200, headers: {"Content-Type": "application/json"}}));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const service = new FinbaseService("https://finbase.example", token);
+        await service.searchTransactions("1 500,50", "expense", ["account-1"]);
+
+        const url = new URL(String(fetchMock.mock.calls[0][0]));
+        expect(url.searchParams.get("sort")).toBe("-date");
+        expect(url.searchParams.get("filter")).toBe(
+            'amount < 0 && (note ~ "1 500,50" || external_id ~ "1 500,50" || account = "account-1" || amount = -1500.5)',
+        );
+    });
+
+    it("обновляет уже найденную автодетектором пару вместо создания дубля", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+            if (init?.method === "GET") {
+                return new Response(JSON.stringify({
+                    page: 1,
+                    perPage: 200,
+                    totalItems: 1,
+                    totalPages: 1,
+                    items: [{id: "transfer-1", inflow_transaction: "in-1", outflow_transaction: "out-1", status: "pending", notes: ""}],
+                }), {status: 200, headers: {"Content-Type": "application/json"}});
+            }
+            return new Response(JSON.stringify({id: "transfer-1", status: "accepted"}), {
+                status: 200,
+                headers: {"Content-Type": "application/json"},
+            });
+        });
+        vi.stubGlobal("fetch", fetchMock);
+
+        const service = new FinbaseService("https://finbase.example", token);
+        await service.saveTransfer({inflow_transaction: "in-1", outflow_transaction: "out-1", status: "accepted"});
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1][1]?.method).toBe("PATCH");
+        expect(new URL(String(fetchMock.mock.calls[1][0])).pathname).toContain("/transfers/records/transfer-1");
+    });
+});
+
+describe("ручные external_id", () => {
+    it("включает код провайдера, marker manual и UUID", () => {
+        expect(manualTransactionExternalId({provider_code: "T Bank"}, "123e4567-e89b-12d3-a456-426614174000"))
+            .toBe("t-bank_manual_123e4567-e89b-12d3-a456-426614174000");
+        expect(manualTransactionExternalId({provider_code: ""}, "uuid"))
+            .toBe("finbase_manual_uuid");
     });
 });
 
