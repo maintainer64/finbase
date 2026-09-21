@@ -1,14 +1,92 @@
-import {Component, For, Show} from "solid-js";
+import {Component, createMemo, For, Show} from "solid-js";
 import {AlertTriangle, CheckCircle2, Download, Upload, X} from "lucide-solid";
 import {FaSolidSpinner} from "solid-icons/fa";
 import {downloadFile} from "@/shared/utils";
 import {TRANSACTION_CSV_EXAMPLE, type TransactionCsvIssue, type TransactionCsvPreview} from "./transaction-csv";
+import {SimpleTable, type SolidColumnDef} from "@simple-table/solid";
+import {compactTableTheme, simpleTableIcons} from "@/components/ui/simple-table";
 
 export const downloadTransactionCsvExample = () => downloadFile(
     "finbase-transactions-import.csv",
     TRANSACTION_CSV_EXAMPLE,
     {type: "text/csv", addBOM: true},
 );
+
+interface CsvPreviewGridRow {
+    line: number;
+    date: string;
+    account: string;
+    note: string;
+    categoryTags: string;
+    amount: number;
+    currency: string;
+}
+
+const CsvPreviewGrid: Component<{preview: TransactionCsvPreview}> = (props) => {
+    const rows = createMemo<CsvPreviewGridRow[]>(() => props.preview.rows.slice(0, 20).map(row => ({
+        line: row.line,
+        date: String(row.transaction.date ?? "").slice(0, 10),
+        account: row.source.account,
+        note: row.source.note || "—",
+        categoryTags: `${row.source.category || "Без категории"}${row.source.tags ? ` · ${row.source.tags}` : ""}`,
+        amount: Number(row.transaction.amount ?? 0),
+        currency: String(row.transaction.currency ?? ""),
+    })));
+    const columns = createMemo<SolidColumnDef<CsvPreviewGridRow>[]>(() => [
+        {accessor: "line", label: "Строка", width: 76, type: "number", sortable: true},
+        {accessor: "date", label: "Дата", width: "auto", maxWidth: 130, type: "date", sortable: true, filterable: true},
+        {
+            accessor: "account",
+            label: "Счёт",
+            width: "auto",
+            minWidth: 150,
+            maxWidth: 240,
+            type: "enum",
+            sortable: true,
+            filterable: true,
+            enumOptions: [...new Set(rows().map(row => row.account))].map(value => ({label: value, value})),
+        },
+        {accessor: "note", label: "Описание", width: "auto", minWidth: 180, maxWidth: 300, type: "string", sortable: true, filterable: true},
+        {accessor: "categoryTags", label: "Категория / теги", width: "auto", minWidth: 180, maxWidth: 300, type: "string", sortable: true, filterable: true},
+        {
+            accessor: "amount",
+            label: "Сумма",
+            width: "auto",
+            minWidth: 130,
+            maxWidth: 180,
+            type: "number",
+            align: "right",
+            sortable: true,
+            filterable: true,
+            valueFormatter: ({value, row}) => `${Number(value ?? 0).toLocaleString("ru-RU")} ${row.currency}`,
+            useFormattedValueForClipboard: true,
+            cellRenderer: ({row}) => (
+                <span class={`whitespace-nowrap font-semibold tabular-nums ${row.amount >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                    {row.amount.toLocaleString("ru-RU")} {row.currency}
+                </span>
+            ),
+        },
+    ]);
+
+    return (
+        <SimpleTable<CsvPreviewGridRow>
+            columns={columns()}
+            rows={rows()}
+            getRowId={({row}) => row.line}
+            maxHeight="360px"
+            theme="custom"
+            customTheme={compactTableTheme}
+            icons={simpleTableIcons}
+            autoExpandColumns
+            columnResizing
+            columnReordering
+            hoverRowBackground
+            hideFooter
+            initialSortColumn="line"
+            initialSortDirection="asc"
+        />
+    );
+};
 
 export const TransactionCsvDialog: Component<{
     filename: string;
@@ -63,25 +141,7 @@ export const TransactionCsvDialog: Component<{
                             <span class="flex items-center gap-2 text-sm font-medium text-slate-700"><CheckCircle2 size={16} class="text-emerald-500"/> Предпросмотр корректных строк</span>
                             <span class="text-xs text-slate-400">Показаны первые {Math.min(20, props.preview.rows.length)}</span>
                         </div>
-                        <div class="overflow-auto">
-                            <table class="w-full min-w-[760px] text-xs">
-                                <thead><tr class="border-t border-slate-200 bg-white text-left text-slate-400">
-                                    <th class="px-3 py-2">Строка</th><th class="px-3 py-2">Дата</th><th class="px-3 py-2">Счёт</th><th class="px-3 py-2">Описание</th><th class="px-3 py-2">Категория / теги</th><th class="px-3 py-2 text-right">Сумма</th>
-                                </tr></thead>
-                                <tbody class="divide-y divide-slate-100">
-                                <For each={props.preview.rows.slice(0, 20)}>{(row) => (
-                                    <tr>
-                                        <td class="px-3 py-2 text-slate-400">{row.line}</td>
-                                        <td class="whitespace-nowrap px-3 py-2 text-slate-500">{String(row.transaction.date).slice(0, 10)}</td>
-                                        <td class="max-w-48 truncate px-3 py-2 font-medium text-slate-700" title={row.source.account}>{row.source.account}</td>
-                                        <td class="max-w-56 truncate px-3 py-2 text-slate-600" title={row.source.note}>{row.source.note || "—"}</td>
-                                        <td class="max-w-52 truncate px-3 py-2 text-slate-500">{row.source.category || "Без категории"}{row.source.tags ? ` · ${row.source.tags}` : ""}</td>
-                                        <td class={`whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums ${Number(row.transaction.amount) >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{Number(row.transaction.amount).toLocaleString("ru-RU")} {row.transaction.currency}</td>
-                                    </tr>
-                                )}</For>
-                                </tbody>
-                            </table>
-                        </div>
+                        <CsvPreviewGrid preview={props.preview}/>
                     </div>
                 </Show>
             </div>

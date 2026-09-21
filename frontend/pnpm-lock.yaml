@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@simple-table/solid':
+        specifier: ^4.2.9
+        version: 4.2.9(solid-js@1.9.14)
       '@solid-primitives/storage':
         specifier: ^4.4.0
         version: 4.4.0(solid-js@1.9.14)
@@ -535,6 +538,11 @@ packages:
 
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
+
+  '@simple-table/solid@4.2.9':
+    resolution: {integrity: sha512-cT1/yZzjGV6l22HGRsDnlOvkx2N3+WjwNQJMgpop4qUe9CXmDupQa7SR0iyKYIoPJ+47Ao5gzuSbcE3Yn+QOew==}
+    peerDependencies:
+      solid-js: '>=1.0.0'
 
   '@solid-primitives/storage@4.4.0':
     resolution: {integrity: sha512-+u0dpTqrUG7h+IMfmGLCx7vx2Q0Eon6paBgzcWhEP/dauElpGU3ElpZZOZgw8YKR1+J4X4ENiAL0na3VH8RWMg==}
@@ -1451,6 +1459,9 @@ packages:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
 
+  simple-table-core@4.2.9:
+    resolution: {integrity: sha512-fljJQrbMTNNhGOKXVBcbiuR8USM/APC8QkWDVPsd7LVox2wsk+4GARDDYPTFeFXNX/Lb/CkBN5q6iklWR6b47Q==}
+
   slice-ansi@7.1.2:
     resolution: {integrity: sha512-iOBWFgUX7caIZiuutICxVgX1SdxwAVFFKwt1EvMYYec/NWO5meOJ6K5uQxhrYBdQJne4KxiqZc+KptFOWFSI9w==}
     engines: {node: '>=18'}
@@ -2082,6 +2093,11 @@ snapshots:
     optional: true
 
   '@rolldown/pluginutils@1.0.1': {}
+
+  '@simple-table/solid@4.2.9(solid-js@1.9.14)':
+    dependencies:
+      simple-table-core: 4.2.9
+      solid-js: 1.9.14
 
   '@solid-primitives/storage@4.4.0(solid-js@1.9.14)':
     dependencies:
@@ -2966,6 +2982,8 @@ snapshots:
   siginfo@2.0.0: {}
 
   signal-exit@4.1.0: {}
+
+  simple-table-core@4.2.9: {}
 
   slice-ansi@7.1.2:
     dependencies:

@@ -4,12 +4,28 @@ import {AccountRecord, CategoryRecord, TagRecord, TransactionRecord} from "@/sha
 import {CategoryIcon} from "@/components/ui/category-icon";
 import {formatDateOnly} from "@/shared/date";
 import {formatMoney as fmtMoney} from "./money";
+import {SimpleTable, type SolidColumnDef} from "@simple-table/solid";
+import {compactTableTheme, simpleTableIcons} from "@/components/ui/simple-table";
 
 interface CurrencySummary {
     currency: string;
     income: number;
     expense: number;
     net: number;
+}
+
+interface DetailTransactionRow {
+    id: string;
+    date: string;
+    accountName: string;
+    note: string;
+    externalId: string;
+    categoryName: string;
+    categoryColor: string;
+    categoryIcon: string;
+    tagNames: string[];
+    amount: number;
+    currency: string;
 }
 
 export const DynamicsDetailDialog: Component<{
@@ -26,9 +42,113 @@ export const DynamicsDetailDialog: Component<{
     const accountMap = createMemo(() => new Map(props.accounts.map(item => [item.id, item])));
     const categoryMap = createMemo(() => new Map(props.categories.map(item => [item.id, item])));
     const tagMap = createMemo(() => new Map(props.tags.map(item => [item.id, item])));
-    const orderedTransactions = createMemo(() => [...props.transactions].sort((a, b) =>
-        b.date.localeCompare(a.date) || Math.abs(b.amount) - Math.abs(a.amount),
-    ));
+    const tableRows = createMemo<DetailTransactionRow[]>(() => [...props.transactions]
+        .sort((a, b) => b.date.localeCompare(a.date) || Math.abs(b.amount) - Math.abs(a.amount))
+        .map(transaction => {
+            const category = categoryMap().get(transaction.category);
+            return {
+                id: transaction.id,
+                date: transaction.date,
+                accountName: accountMap().get(transaction.account)?.name ?? transaction.account,
+                note: transaction.note || "Без описания",
+                externalId: transaction.external_id,
+                categoryName: category?.name ?? "Без категории",
+                categoryColor: category?.color || "#94a3b8",
+                categoryIcon: category?.lucide_icon ?? "",
+                tagNames: transaction.tags.map(tagId => tagMap().get(tagId)?.name ?? tagId),
+                amount: transaction.amount,
+                currency: transaction.currency,
+            };
+        }));
+    const columns = createMemo<SolidColumnDef<DetailTransactionRow>[]>(() => [
+        {
+            accessor: "date",
+            label: "Дата",
+            width: "auto",
+            maxWidth: 150,
+            type: "date",
+            sortable: true,
+            filterable: true,
+            sortingOrder: ["asc", "desc"],
+            valueFormatter: ({value}) => formatDateOnly(String(value ?? "")),
+            useFormattedValueForClipboard: true,
+        },
+        {
+            accessor: "accountName",
+            label: "Счёт",
+            width: "auto",
+            minWidth: 140,
+            maxWidth: 220,
+            type: "enum",
+            sortable: true,
+            filterable: true,
+            enumOptions: props.accounts.map(account => ({label: account.name, value: account.name})),
+        },
+        {
+            accessor: "note",
+            label: "Операция",
+            width: "auto",
+            minWidth: 220,
+            maxWidth: 360,
+            type: "string",
+            sortable: true,
+            filterable: true,
+            cellRenderer: ({row}) => (
+                <div class="min-w-0">
+                    <div class="truncate font-medium text-slate-700" title={row.note}>{row.note}</div>
+                    <Show when={row.externalId}>
+                        <div class="mt-0.5 truncate text-[10px] text-slate-300" title={row.externalId}>{row.externalId}</div>
+                    </Show>
+                </div>
+            ),
+        },
+        {
+            accessor: "categoryName",
+            label: "Категория и теги",
+            width: "auto",
+            minWidth: 190,
+            maxWidth: 320,
+            type: "enum",
+            sortable: true,
+            filterable: true,
+            enumOptions: [
+                {label: "Без категории", value: "Без категории"},
+                ...props.categories.map(category => ({label: category.name, value: category.name})),
+            ],
+            cellRenderer: ({row}) => (
+                <div class="min-w-0">
+                    <div class="flex items-center gap-1.5 text-xs text-slate-600">
+                        <span class="size-2 shrink-0 rounded-full" style={{background: row.categoryColor}}/>
+                        <Show when={row.categoryIcon}><CategoryIcon name={row.categoryIcon} size={14}/></Show>
+                        <span class="truncate">{row.categoryName}</span>
+                    </div>
+                    <div class="mt-1 flex min-w-0 gap-1 overflow-hidden">
+                        <Show when={row.tagNames.length > 0} fallback={<span class="text-[10px] text-slate-300">Без тегов</span>}>
+                            <For each={row.tagNames}>{name => <span class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{name}</span>}</For>
+                        </Show>
+                    </div>
+                </div>
+            ),
+        },
+        {
+            accessor: "amount",
+            label: "Сумма",
+            width: "auto",
+            minWidth: 130,
+            maxWidth: 180,
+            type: "number",
+            align: "right",
+            sortable: true,
+            filterable: true,
+            valueFormatter: ({value, row}) => fmtMoney(Number(value ?? 0), row.currency),
+            useFormattedValueForClipboard: true,
+            cellRenderer: ({row}) => (
+                <span class={`whitespace-nowrap font-semibold tabular-nums ${row.amount >= 0 ? "text-emerald-700" : "text-rose-600"}`}>
+                    {fmtMoney(row.amount, row.currency)}
+                </span>
+            ),
+        },
+    ]);
     const summaries = createMemo<CurrencySummary[]>(() => {
         const byCurrency = new Map<string, CurrencySummary>();
         for (const transaction of props.transactions) {
@@ -111,67 +231,26 @@ export const DynamicsDetailDialog: Component<{
                             </div>
                         </div>
 
-                        <Show when={orderedTransactions().length > 0} fallback={
+                        <Show when={tableRows().length > 0} fallback={
                             <div class="py-14 text-center text-sm text-slate-400">В этом срезе операций нет.</div>
                         }>
-                            <div class="overflow-x-auto rounded-xl border border-slate-200">
-                                <table class="min-w-full text-sm">
-                                    <thead class="bg-slate-50 text-xs text-slate-400">
-                                    <tr>
-                                        <th class="whitespace-nowrap px-3 py-2.5 text-left font-medium">Дата</th>
-                                        <th class="min-w-36 px-3 py-2.5 text-left font-medium">Счёт</th>
-                                        <th class="min-w-64 px-3 py-2.5 text-left font-medium">Операция</th>
-                                        <th class="min-w-40 px-3 py-2.5 text-left font-medium">Категория и теги</th>
-                                        <th class="whitespace-nowrap px-3 py-2.5 text-right font-medium">Сумма</th>
-                                    </tr>
-                                    </thead>
-                                    <tbody>
-                                    <For each={orderedTransactions()}>
-                                        {(transaction) => {
-                                            const category = () => categoryMap().get(transaction.category);
-                                            return (
-                                                <tr class="border-t border-slate-100 align-top hover:bg-slate-50/70">
-                                                    <td class="whitespace-nowrap px-3 py-3 text-xs text-slate-500">{formatDateOnly(transaction.date)}</td>
-                                                    <td class="px-3 py-3 text-slate-600">{accountMap().get(transaction.account)?.name ?? transaction.account}</td>
-                                                    <td class="px-3 py-3">
-                                                        <div class="font-medium text-slate-700">{transaction.note || "Без описания"}</div>
-                                                        <Show when={transaction.external_id}>
-                                                            <div class="mt-0.5 max-w-64 truncate text-[10px] text-slate-300">{transaction.external_id}</div>
-                                                        </Show>
-                                                    </td>
-                                                    <td class="px-3 py-3">
-                                                        <div class="flex items-center gap-1.5 text-xs text-slate-600">
-                                                            <Show when={category()} fallback={<span class="text-slate-400">Без категории</span>}>
-                                                                {(item) => (
-                                                                    <>
-                                                                        <span class="h-2 w-2 rounded-full" style={{background: item().color || "#94a3b8"}}/>
-                                                                        <CategoryIcon name={item().lucide_icon} size={14}/>
-                                                                        <span>{item().name}</span>
-                                                                    </>
-                                                                )}
-                                                            </Show>
-                                                        </div>
-                                                        <div class="mt-1 flex flex-wrap gap-1">
-                                                            <Show when={transaction.tags.length > 0} fallback={<span class="text-[10px] text-slate-300">Без тегов</span>}>
-                                                                <For each={transaction.tags}>
-                                                                    {(tagId) => {
-                                                                        const tag = () => tagMap().get(tagId);
-                                                                        return <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{tag()?.name ?? tagId}</span>;
-                                                                    }}
-                                                                </For>
-                                                            </Show>
-                                                        </div>
-                                                    </td>
-                                                    <td class={`whitespace-nowrap px-3 py-3 text-right font-semibold tabular-nums ${transaction.amount >= 0 ? "text-emerald-700" : "text-rose-600"}`}>
-                                                        {fmtMoney(transaction.amount, transaction.currency)}
-                                                    </td>
-                                                </tr>
-                                            );
-                                        }}
-                                    </For>
-                                    </tbody>
-                                </table>
-                            </div>
+                            <SimpleTable<DetailTransactionRow>
+                                columns={columns()}
+                                rows={tableRows()}
+                                getRowId={({row}) => row.id}
+                                maxHeight="min(52vh, 560px)"
+                                theme="custom"
+                                customTheme={{...compactTableTheme, rowHeight: 60}}
+                                icons={simpleTableIcons}
+                                autoExpandColumns
+                                columnResizing
+                                columnReordering
+                                enableColumnEditor
+                                hoverRowBackground
+                                hideFooter
+                                initialSortColumn="date"
+                                initialSortDirection="desc"
+                            />
                         </Show>
                     </Show>
                 </div>

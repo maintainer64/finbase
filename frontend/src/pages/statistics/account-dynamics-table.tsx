@@ -1,5 +1,6 @@
-import {Component, createMemo, createSignal, For, Show} from "solid-js";
-import {ArrowDown, ArrowUp, ArrowUpDown} from "lucide-solid";
+import {Component, createMemo, createSignal} from "solid-js";
+import {SimpleTable, type SolidColumnDef} from "@simple-table/solid";
+import {compactTableTheme, simpleTableIcons} from "@/components/ui/simple-table";
 
 export type DynamicsBucket = "year" | "month" | "week";
 
@@ -23,9 +24,19 @@ export interface DynamicsSelection {
     period?: string;
 }
 
+type DynamicsGridRow = Record<string, unknown> & {
+    id: string;
+    name: string;
+    color: string;
+    currency: string;
+    total: number;
+    isTotal: boolean;
+    source?: DynamicsAccountRow;
+    details: Record<string, DynamicsCell>;
+};
+
 const fmt = new Intl.NumberFormat("ru-RU", {maximumFractionDigits: 0});
 const monthFmt = new Intl.DateTimeFormat("ru-RU", {month: "short", year: "numeric", timeZone: "UTC"});
-
 const emptyCell = (): DynamicsCell => ({income: 0, expense: 0, net: 0});
 
 const amount = (value: number): string => {
@@ -54,158 +65,167 @@ export const AccountDynamicsTable: Component<{
     bucket: DynamicsBucket;
     onSelect: (selection: DynamicsSelection) => void;
 }> = (props) => {
-    const [sort, setSort] = createSignal<{key: "name" | "total" | string; direction: "asc" | "desc"}>({key: "total", direction: "desc"});
-    const toggleSort = (key: string) => setSort((current) => ({
-        key,
-        direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
-    }));
-    const sortedRows = createMemo(() => {
-        const state = sort();
-        const direction = state.direction === "asc" ? 1 : -1;
-        return [...props.rows].sort((left, right) => {
-            if (state.key === "name") return left.name.localeCompare(right.name, "ru") * direction;
-            const leftValue = state.key === "total" ? left.total.net : left.cells.get(state.key)?.net ?? 0;
-            const rightValue = state.key === "total" ? right.total.net : right.cells.get(state.key)?.net ?? 0;
-            return (leftValue - rightValue) * direction;
-        });
-    });
-    const sortIcon = (key: string) => (
-        <Show when={sort().key === key} fallback={<ArrowUpDown size={12} class="opacity-35"/>}>
-            {sort().direction === "asc" ? <ArrowUp size={12}/> : <ArrowDown size={12}/>} 
-        </Show>
-    );
+    const [sort, setSort] = createSignal<{key: string; direction: "asc" | "desc"}>({key: "total", direction: "desc"});
 
-    const periodTotal = (period: string): DynamicsCell => props.rows.reduce(
-        (total, row) => {
-            const cell = row.cells.get(period) ?? emptyCell();
-            total.income += cell.income;
-            total.expense += cell.expense;
-            total.net += cell.net;
-            return total;
-        },
-        emptyCell(),
-    );
-
-    const overallTotal = (): DynamicsCell => props.rows.reduce(
-        (total, row) => {
+    const totals = createMemo(() => {
+        const details: Record<string, DynamicsCell> = Object.fromEntries(props.periods.map(period => [period, emptyCell()]));
+        const total = emptyCell();
+        for (const row of props.rows) {
+            for (const period of props.periods) {
+                const cell = row.cells.get(period) ?? emptyCell();
+                details[period].income += cell.income;
+                details[period].expense += cell.expense;
+                details[period].net += cell.net;
+            }
             total.income += row.total.income;
             total.expense += row.total.expense;
             total.net += row.total.net;
-            return total;
+        }
+        details.total = total;
+        return details;
+    });
+
+    const accountRows = createMemo<DynamicsGridRow[]>(() => props.rows.map(row => {
+        const details = Object.fromEntries(props.periods.map(period => [period, row.cells.get(period) ?? emptyCell()]));
+        details.total = row.total;
+        return {
+            id: row.id,
+            name: row.name,
+            color: row.color,
+            currency: row.currency,
+            total: row.total.net,
+            isTotal: false,
+            source: row,
+            details,
+            ...Object.fromEntries(props.periods.map(period => [period, details[period].net])),
+        };
+    }));
+
+    const tableRows = createMemo<DynamicsGridRow[]>(() => {
+        const state = sort();
+        const direction = state.direction === "asc" ? 1 : -1;
+        const rows = [...accountRows()].sort((left, right) => {
+            if (state.key === "name") return left.name.localeCompare(right.name, "ru") * direction;
+            return (Number(left[state.key] ?? 0) - Number(right[state.key] ?? 0)) * direction;
+        });
+        const details = totals();
+        return [...rows, {
+            id: "__all_accounts__",
+            name: "Все счета",
+            color: "",
+            currency: "",
+            total: details.total.net,
+            isTotal: true,
+            details,
+            ...Object.fromEntries(props.periods.map(period => [period, details[period].net])),
+        }];
+    });
+
+    const amountButton = (row: DynamicsGridRow, key: string, label: string) => {
+        const cell = row.details[key] ?? emptyCell();
+        const available = row.isTotal || key === "total" || Boolean(row.source?.cells.has(key));
+        return (
+            <button
+                type="button"
+                class={`finbase-st-money-cell ${amountClass(cell.net)}`}
+                title={`${cellTitle(cell)}. Нажмите для детализации`}
+                aria-label={`${row.name}, ${label}: ${cellTitle(cell)}`}
+                disabled={!available}
+                onClick={() => props.onSelect({
+                    accountId: row.isTotal ? undefined : row.id,
+                    period: key === "total" ? undefined : key,
+                })}
+            >
+                {amount(cell.net)}
+            </button>
+        );
+    };
+
+    const columns = createMemo<SolidColumnDef<DynamicsGridRow>[]>(() => [
+        {
+            accessor: "name",
+            label: "Счёт",
+            width: "auto",
+            minWidth: 190,
+            maxWidth: 260,
+            type: "string",
+            sortable: true,
+            sortingOrder: ["asc", "desc"],
+            pinned: "left",
+            essential: true,
+            cellRenderer: ({row}) => row.isTotal ? (
+                <span class="font-semibold text-slate-600">Все счета</span>
+            ) : (
+                <div class="flex min-w-0 items-center gap-2">
+                    <span class="size-2.5 shrink-0 rounded-full" style={{background: row.color}}/>
+                    <span class="min-w-0">
+                        <span class="block truncate font-medium text-slate-700">{row.name}</span>
+                        <span class="block text-[10px] uppercase tracking-wide text-slate-400">{row.currency}</span>
+                    </span>
+                </div>
+            ),
         },
-        emptyCell(),
-    );
+        ...props.periods.map((period): SolidColumnDef<DynamicsGridRow> => ({
+            accessor: period,
+            label: dynamicsPeriodLabel(period, props.bucket),
+            width: "auto",
+            minWidth: 116,
+            maxWidth: 160,
+            type: "number",
+            align: "right",
+            sortable: true,
+            sortingOrder: ["asc", "desc"],
+            valueFormatter: ({value}) => amount(Number(value ?? 0)),
+            useFormattedValueForClipboard: true,
+            cellRenderer: ({row}) => amountButton(row, period, dynamicsPeriodLabel(period, props.bucket)),
+        })),
+        {
+            accessor: "total",
+            label: "Итого",
+            width: "auto",
+            minWidth: 116,
+            maxWidth: 160,
+            type: "number",
+            align: "right",
+            sortable: true,
+            sortingOrder: ["asc", "desc"],
+            pinned: "right",
+            essential: true,
+            valueFormatter: ({value}) => amount(Number(value ?? 0)),
+            useFormattedValueForClipboard: true,
+            cellRenderer: ({row}) => amountButton(row, "total", "Итого"),
+        },
+    ]);
 
     return (
         <>
             <div class="mb-3">
-                <div>
-                    <h2 class="text-sm font-medium text-gray-600">Динамика по счетам</h2>
-                    <p class="mt-0.5 text-xs text-gray-400">Чистое движение денег за каждый период</p>
-                </div>
+                <h2 class="text-sm font-medium text-gray-600">Динамика по счетам</h2>
+                <p class="mt-0.5 text-xs text-gray-400">Чистое движение денег за каждый период</p>
             </div>
 
-            <div class="screener-table-wrap max-w-full overflow-auto rounded-xl border border-slate-200">
-                <table class="min-w-full border-separate border-spacing-0 text-xs">
-                    <thead>
-                    <tr>
-                        <th class="sticky left-0 top-0 z-30 min-w-48 border-b border-r border-slate-200 bg-slate-50 p-0 text-left font-medium text-slate-500">
-                            <button class="flex w-full items-center gap-1 px-3 py-2.5" onClick={() => toggleSort("name")}>Счёт {sortIcon("name")}</button>
-                        </th>
-                        <For each={props.periods}>
-                            {(period) => (
-                                <th class="sticky top-0 z-20 min-w-28 whitespace-nowrap border-b border-slate-200 bg-slate-50 p-0 text-right font-medium text-slate-500">
-                                    <button class="flex w-full items-center justify-end gap-1 px-3 py-2.5" onClick={() => toggleSort(period)}>{dynamicsPeriodLabel(period, props.bucket)} {sortIcon(period)}</button>
-                                </th>
-                            )}
-                        </For>
-                        <th class="sticky right-0 top-0 z-30 min-w-28 border-b border-l border-slate-200 bg-slate-100 p-0 text-right font-semibold text-slate-600">
-                            <button class="flex w-full items-center justify-end gap-1 px-3 py-2.5" onClick={() => toggleSort("total")}>Итого {sortIcon("total")}</button>
-                        </th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    <For each={sortedRows()}>
-                        {(row) => (
-                            <tr class="group">
-                                <th class="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-3 py-2.5 text-left font-normal group-hover:bg-slate-50">
-                                    <div class="flex items-center gap-2">
-                                        <span class="h-2.5 w-2.5 shrink-0 rounded-full" style={{background: row.color}}/>
-                                        <span class="min-w-0">
-                                            <span class="block truncate font-medium text-slate-700">{row.name}</span>
-                                            <span class="block text-[10px] uppercase tracking-wide text-slate-400">{row.currency}</span>
-                                        </span>
-                                    </div>
-                                </th>
-                                <For each={props.periods}>
-                                    {(period) => {
-                                        const cell = () => row.cells.get(period) ?? emptyCell();
-                                        return (
-                                            <td class="border-b border-slate-100 p-0 group-hover:bg-slate-50">
-                                                <button
-                                                    type="button"
-                                                    class={`w-full whitespace-nowrap px-3 py-2.5 text-right tabular-nums outline-none hover:bg-blue-50 focus-visible:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400 ${amountClass(cell().net)}`}
-                                                    title={`${cellTitle(cell())}. Нажмите для детализации`}
-                                                    aria-label={`${row.name}, ${dynamicsPeriodLabel(period, props.bucket)}: ${cellTitle(cell())}`}
-                                                    disabled={!row.cells.has(period)}
-                                                    onClick={() => props.onSelect({accountId: row.id, period})}
-                                                >
-                                                    {amount(cell().net)}
-                                                </button>
-                                            </td>
-                                        );
-                                    }}
-                                </For>
-                                <td class="sticky right-0 z-10 border-b border-l border-slate-200 bg-slate-50 p-0">
-                                    <button
-                                        type="button"
-                                        class={`w-full whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums outline-none hover:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400 ${amountClass(row.total.net)}`}
-                                        title={`${cellTitle(row.total)}. Нажмите для детализации`}
-                                        onClick={() => props.onSelect({accountId: row.id})}
-                                    >
-                                        {amount(row.total.net)}
-                                    </button>
-                                </td>
-                            </tr>
-                        )}
-                    </For>
-                    </tbody>
-                    <tfoot>
-                    <tr>
-                        <th class="sticky bottom-0 left-0 z-30 border-r border-t border-slate-200 bg-slate-100 px-3 py-2.5 text-left font-semibold text-slate-600">
-                            Все счета
-                        </th>
-                        <For each={props.periods}>
-                            {(period) => {
-                                const total = () => periodTotal(period);
-                                return (
-                                    <td class="sticky bottom-0 border-t border-slate-200 bg-slate-50 p-0">
-                                        <button
-                                            type="button"
-                                            class={`w-full whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums outline-none hover:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400 ${amountClass(total().net)}`}
-                                            title={`${cellTitle(total())}. Нажмите для детализации`}
-                                            onClick={() => props.onSelect({period})}
-                                        >
-                                            {amount(total().net)}
-                                        </button>
-                                    </td>
-                                );
-                            }}
-                        </For>
-                        <td class="sticky bottom-0 right-0 z-30 border-l border-t border-slate-300 bg-slate-100 p-0">
-                            <button
-                                type="button"
-                                class={`w-full whitespace-nowrap px-3 py-2.5 text-right font-bold tabular-nums outline-none hover:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400 ${amountClass(overallTotal().net)}`}
-                                title={`${cellTitle(overallTotal())}. Нажмите для детализации`}
-                                onClick={() => props.onSelect({})}
-                            >
-                                {amount(overallTotal().net)}
-                            </button>
-                        </td>
-                    </tr>
-                    </tfoot>
-                </table>
-            </div>
+            <SimpleTable<DynamicsGridRow>
+                columns={columns()}
+                rows={tableRows()}
+                getRowId={({row}) => row.id}
+                getRowClass={({row}) => row.isTotal ? "finbase-st-total-row" : undefined}
+                maxHeight="min(56vh, 620px)"
+                theme="custom"
+                customTheme={{...compactTableTheme, rowHeight: 52}}
+                icons={simpleTableIcons}
+                autoExpandColumns
+                columnResizing
+                columnReordering
+                hoverRowBackground
+                hideFooter
+                externalSortHandling
+                initialSortColumn="total"
+                initialSortDirection="desc"
+                onSortChange={(nextSort) => {
+                    if (!nextSort) return;
+                    setSort({key: String(nextSort.key.accessor), direction: nextSort.direction});
+                }}
+            />
             <p class="mt-2 text-[11px] text-slate-400">Нажмите на сумму, чтобы открыть операции и подробности.</p>
         </>
     );

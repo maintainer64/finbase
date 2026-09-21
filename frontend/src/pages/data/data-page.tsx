@@ -7,7 +7,7 @@ import {PocketBaseRecord, TransactionRecord, WritableRecord} from "@/shared/finb
 import {COLLECTIONS, CollectionSpec, FieldSpec} from "./finbase-schema";
 import {MultiSelect} from "@/pages/statistics/multi-select";
 import {CategoryIcon, CategoryIconPicker} from "@/components/ui/category-icon";
-import {ArrowDown, ArrowUp, ArrowUpDown, Download, FileUp, Maximize2, RefreshCw, RotateCcw, Search} from "lucide-solid";
+import {Download, FileUp, Maximize2, RefreshCw, RotateCcw, Search} from "lucide-solid";
 import {openFinbaseTab, useFullAppWindow} from "@/shared/open-finbase";
 import {buildDataFilter, EMPTY_RELATION_FILTER} from "./data-filter";
 import {parseTransactionCsv, type TransactionCsvIssue, type TransactionCsvPreview} from "./transaction-csv";
@@ -18,8 +18,11 @@ import {formatDateOnly, toDateTimeValue, toDateValue} from "@/shared/date";
 import {DateTimePicker} from "@/components/ui/date-time-picker";
 import {manualTransactionExternalId} from "@/shared/finbase/manual-transaction";
 import {RelationOption, TransactionRelationInput} from "./transaction-relation-input";
+import {SimpleTable, type ColumnType, type SolidColumnDef} from "@simple-table/solid";
+import {compactTableTheme, simpleTableIcons} from "@/components/ui/simple-table";
 
 type UiRecord = PocketBaseRecord & Record<string, unknown>;
+type DataTableRow = UiRecord & {__actions: string};
 
 type RelOptions = Map<string, RelationOption[]>;
 
@@ -507,6 +510,22 @@ const CellValue: Component<CellValueProps> = (props) => {
 const DATA_PAGE_SIZE = 50;
 const TRANSACTION_RELATION_LIMIT = 100;
 
+const tableColumnType = (field: FieldSpec): ColumnType => {
+    if (field.kind === "number") return "number";
+    if (field.kind === "boolean") return "boolean";
+    if (field.kind === "date") return "date";
+    if (field.kind === "select") return "enum";
+    return "string";
+};
+
+const tableColumnMaxWidth = (field: FieldSpec): number => {
+    if (field.kind === "textarea") return 320;
+    if (field.kind === "relation-many") return 180;
+    if (field.kind === "date") return 180;
+    if (field.kind === "icon" || field.kind === "color" || field.kind === "boolean") return 190;
+    return 240;
+};
+
 export const DataPage: Component = () => {
     const fullApp = useFullAppWindow();
     const [finbaseUrl] = useSetting("finbase-url");
@@ -542,8 +561,6 @@ export const DataPage: Component = () => {
     const [amountKind, setAmountKind] = createSignal<"" | "income" | "expense">("");
     const [sort, setSort] = createSignal<{field: string; direction: "asc" | "desc"}>({field: "name", direction: "asc"});
     const [reloadVersion, setReloadVersion] = createSignal(0);
-    const [tableContainer, setTableContainer] = createSignal<HTMLDivElement>();
-    const [loadMoreSentinel, setLoadMoreSentinel] = createSignal<HTMLDivElement>();
     let listRequestId = 0;
     let optionsRequestId = 0;
 
@@ -713,18 +730,6 @@ export const DataPage: Component = () => {
         void loadPage(service, spec(), page() + 1, false, serverFilter(), serverSort());
     };
 
-    createEffect(() => {
-        const root = tableContainer();
-        const sentinel = loadMoreSentinel();
-        const canLoad = hasMore() && !loadingMore() && !loading();
-        if (!root || !sentinel || !canLoad) return;
-        const observer = new IntersectionObserver((entries) => {
-            if (entries.some(entry => entry.isIntersecting)) loadNextPage();
-        }, {root, rootMargin: "240px 0px"});
-        observer.observe(sentinel);
-        onCleanup(() => observer.disconnect());
-    });
-
     const save = (payload: Record<string, unknown>) => {
         const service = finbase();
         const coll = spec();
@@ -763,7 +768,69 @@ export const DataPage: Component = () => {
             .finally(() => setSaving(false));
     };
 
+    const removeRecord = (record: UiRecord) => {
+        const service = finbase();
+        const collection = spec();
+        if (!service || !confirm(`Удалить ${collection.label.toLowerCase()} «${String(record[collection.displayField] ?? record.id)}»?`)) return;
+        service.deleteRecord(collection.collection, record.id)
+            .then(() => reload())
+            .catch((cause) => toast.error(cause instanceof Error ? cause.message : String(cause)));
+    };
+
     const listableFields = createMemo(() => spec().fields.filter((f) => f.listable));
+    const tableRows = createMemo<DataTableRow[]>(() => records().map(record => ({...record, __actions: ""})));
+    const tableColumns = createMemo<SolidColumnDef<DataTableRow>[]>(() => [
+        ...listableFields().map((field, index): SolidColumnDef<DataTableRow> => ({
+            accessor: field.name,
+            label: field.label,
+            width: "auto",
+            minWidth: field.kind === "icon" ? 100 : 116,
+            maxWidth: tableColumnMaxWidth(field),
+            type: tableColumnType(field),
+            sortable: true,
+            sortingOrder: ["asc", "desc"],
+            pinned: index === 0 ? "left" : undefined,
+            essential: index === 0,
+            enumOptions: field.kind === "select"
+                ? (field.options ?? []).map(value => ({label: value, value}))
+                : undefined,
+            cellRenderer: ({row}) => (
+                <CellValue field={field} record={row} relLabels={relationOptions()}/>
+            ),
+        })),
+        {
+            accessor: "__actions",
+            label: "Действия",
+            width: 92,
+            type: "other",
+            align: "right",
+            pinned: "right",
+            essential: true,
+            disableReorder: true,
+            cellClass: "finbase-st-actions-cell",
+            cellRenderer: ({row}) => (
+                <div class="finbase-st-actions">
+                    <button
+                        type="button"
+                        aria-label="Редактировать"
+                        title="Редактировать"
+                        onClick={() => setModal({record: row})}
+                    >
+                        <FaSolidPen/>
+                    </button>
+                    <button
+                        type="button"
+                        class="finbase-st-action-danger"
+                        aria-label="Удалить"
+                        title="Удалить"
+                        onClick={() => removeRecord(row)}
+                    >
+                        <FaSolidTrash/>
+                    </button>
+                </div>
+            ),
+        },
+    ]);
     const filterFields = createMemo(() => listableFields().filter((field) =>
         field.kind === "select" || field.kind === "relation" || field.kind === "relation-many",
     ));
@@ -788,11 +855,6 @@ export const DataPage: Component = () => {
         }
         return result;
     });
-
-    const toggleSort = (field: string) => setSort((current) => ({
-        field,
-        direction: current.field === field && current.direction === "asc" ? "desc" : "asc",
-    }));
 
     const hasActiveFilters = createMemo(() => Boolean(
         search() || fromDate() || toDate() || amountKind() || Object.values(fieldFilters()).some(Boolean),
@@ -995,84 +1057,33 @@ export const DataPage: Component = () => {
                 <div class="flex items-center justify-between text-xs text-slate-400">
                     <span class="rounded-full bg-slate-100 px-2.5 py-1">Загружено: {records().length} из {totalItems()}</span>
                 </div>
-                <div
-                    ref={setTableContainer}
-                    class="data-table-wrap screener-table-wrap"
-                    onScroll={(event) => {
-                        const target = event.currentTarget;
-                        if (target.scrollHeight - target.scrollTop - target.clientHeight < 280) loadNextPage();
-                    }}
-                >
-                    <table class="screener-table w-full text-xs">
-                        <thead class="sticky top-0 z-20">
-                        <tr class="bg-slate-50/80 text-slate-400 uppercase tracking-wide">
-                            <For each={listableFields()}>
-                                {(field, index) => (
-                                    <th class={`whitespace-nowrap p-0 text-left font-medium ${index() === 0 ? "sticky left-0 z-30 bg-slate-50" : ""}`}>
-                                        <button class="flex w-full items-center gap-1 px-2 py-2.5 first:pl-3 hover:text-blue-600" onClick={() => toggleSort(field.name)}>
-                                            {field.label}
-                                            <Show when={sort().field === field.name} fallback={<ArrowUpDown size={12} class="opacity-35"/>}>
-                                                {sort().direction === "asc" ? <ArrowUp size={12}/> : <ArrowDown size={12}/>} 
-                                            </Show>
-                                        </button>
-                                    </th>
-                                )}
-                            </For>
-                            <th class="sticky right-0 z-30 bg-slate-50 py-2.5 pl-2 pr-3 text-right font-medium">Действия</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <For each={records()}>
-                            {(record) => (
-                                <tr class="group border-b border-slate-100 transition-colors hover:bg-blue-50/40">
-                                    <For each={listableFields()}>
-                                        {(field, index) => (
-                                            <td class={`px-2 py-2 first:pl-3 ${index() === 0 ? "sticky left-0 z-10 bg-white font-medium group-hover:bg-blue-50" : ""}`}>
-                                                <CellValue field={field} record={record} relLabels={relationOptions()}/>
-                                            </td>
-                                        )}
-                                    </For>
-                                    <td class="sticky right-0 z-10 bg-white py-2 pl-2 pr-3 text-right group-hover:bg-blue-50">
-                                        <button
-                                            class="text-gray-400 hover:text-blue-500 mr-2"
-                                            aria-label="Редактировать"
-                                            onClick={() => setModal({record})}
-                                        >
-                                            <FaSolidPen/>
-                                        </button>
-                                        <button
-                                            class="text-gray-400 hover:text-red-500"
-                                            aria-label="Удалить"
-                                            onClick={() => {
-                                                if (confirm(`Удалить ${spec().label.toLowerCase()} «${String(record[spec().displayField] ?? record.id)}»?`)) {
-                                                    const service = finbase();
-                                                    const collection = spec();
-                                                    service?.deleteRecord(collection.collection, record.id)
-                                                        .then(() => reload())
-                                                        .catch((e) => toast.error(e instanceof Error ? e.message : String(e)));
-                                                }
-                                            }}
-                                        >
-                                            <FaSolidTrash/>
-                                        </button>
-                                    </td>
-                                </tr>
-                            )}
-                        </For>
-                        </tbody>
-                    </table>
-                    <Show when={loadingMore() || hasMore()}>
-                        <div ref={setLoadMoreSentinel} class="flex min-h-12 items-center justify-center border-t border-slate-100 bg-white px-4 py-3">
-                            <Show when={loadingMore()} fallback={
-                                <button type="button" class="text-xs text-blue-600 hover:text-blue-700" onClick={loadNextPage}>
-                                    Загрузить ещё
-                                </button>
-                            }>
-                                <span class="flex items-center gap-2 text-xs text-slate-400"><FaSolidSpinner class="animate-spin text-blue-500"/> Загружаем следующую страницу…</span>
-                            </Show>
-                        </div>
-                    </Show>
-                </div>
+                <Show when={spec()} keyed>{(_currentSpec) => (
+                    <SimpleTable<DataTableRow>
+                        columns={tableColumns()}
+                        rows={tableRows()}
+                        getRowId={({row}) => row.id}
+                        maxHeight="min(70vh, 760px)"
+                        theme="custom"
+                        customTheme={compactTableTheme}
+                        icons={simpleTableIcons}
+                        autoExpandColumns
+                        columnResizing
+                        columnReordering
+                        enableColumnEditor
+                        hoverRowBackground
+                        hideFooter
+                        externalSortHandling
+                        initialSortColumn={dateField()?.name ?? spec().displayField}
+                        initialSortDirection={dateField() ? "desc" : "asc"}
+                        onSortChange={(nextSort) => {
+                            if (!nextSort) return;
+                            setSort({field: String(nextSort.key.accessor), direction: nextSort.direction});
+                        }}
+                        isLoading={loadingMore()}
+                        infiniteScrollThreshold={280}
+                        onLoadMore={loadNextPage}
+                    />
+                )}</Show>
             </Show>
 
             <Show when={modal()}>

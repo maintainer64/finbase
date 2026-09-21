@@ -273,12 +273,6 @@ details > summary::-webkit-details-marker {
 
 .status-message { padding: 11px 14px; border: 1px solid #dbeafe; border-radius: 12px; color: #1e40af; background: #eff6ff; font-size: 12px; }
 .status-message--error { border-color: #fecdd3; color: #be123c; background: #fff1f2; }
-.data-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 15px; background: white; box-shadow: 0 7px 24px rgb(15 23 42 / 0.035); }
-.screener-table-wrap { max-height: min(70vh, 760px); overflow: auto; scrollbar-gutter: stable; }
-.screener-table { border-collapse: separate; border-spacing: 0; min-width: max-content; }
-.screener-table thead { box-shadow: 0 1px 0 #e2e8f0, 0 5px 14px rgb(15 23 42 / 0.04); }
-.screener-table tbody tr:last-child { border-bottom: 0; }
-.screener-table th button { letter-spacing: 0.035em; }
 .empty-state { display: flex; min-height: 220px; align-items: center; justify-content: center; flex-direction: column; gap: 7px; border: 1px dashed #cbd5e1; border-radius: 16px; background: rgb(255 255 255 / 0.6); }
 .empty-state__icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 14px; color: #94a3b8; background: #f1f5f9; }
 
@@ -300,6 +294,153 @@ details > summary::-webkit-details-marker {
 @media (max-width: 480px) {
     .summary-grid { grid-template-columns: 1fr; }
 }
+
+/* Simple Table uses the Finbase surface, typography, and interaction palette. */
+.theme-custom {
+    --st-border-radius: 15px;
+    --st-cell-padding: 10px;
+    --st-spacing-small: 4px;
+    --st-spacing-medium: 8px;
+    --st-overlay-font-size: 12px;
+    --st-overlay-padding: 10px;
+    --st-control-padding-y: 7px;
+    --st-control-padding-x: 10px;
+    --st-datepicker-day-size: 30px;
+    --st-scrollbar-bg-color: #f8fafc;
+    --st-scrollbar-thumb-color: #cbd5e1;
+    --st-scrollbar-width: thin;
+    --st-border-color: #e2e8f0;
+    --st-body-background-color: #ffffff;
+    --st-footer-background-color: #f8fafc;
+    --st-footer-text-color: #64748b;
+    --st-last-group-row-separator-border-color: #cbd5e1;
+    --st-odd-row-background-color: #ffffff;
+    --st-even-row-background-color: #ffffff;
+    --st-hover-row-background-color: #eff6ff;
+    --st-selected-row-background-color: #dbeafe;
+    --st-odd-column-background-color: #ffffff;
+    --st-even-column-background-color: #ffffff;
+    --st-header-background-color: #f8fafc;
+    --st-sub-header-background-color: #f1f5f9;
+    --st-header-label-color: #64748b;
+    --st-header-icon-color: #94a3b8;
+    --st-cell-color: #475569;
+    --st-cell-odd-row-color: #475569;
+    --st-edit-cell-shadow: 0 8px 24px rgb(15 23 42 / 0.12);
+    --st-sub-cell-background-color: #f8fafc;
+    --st-sub-cell-hover-background-color: #eff6ff;
+    --st-selected-cell-background-color: #dbeafe;
+    --st-selected-first-cell-background-color: #eff6ff;
+    --st-selected-cell-color: #0f172a;
+    --st-selected-first-cell-color: #0f172a;
+    --st-selected-sub-cell-background-color: #bfdbfe;
+    --st-selected-sub-cell-color: #1e3a8a;
+    --st-dragging-background-color: #eff6ff;
+    --st-dragging-sub-header-background-color: #dbeafe;
+    --st-resize-handle-color: #cbd5e1;
+    --st-resize-handle-selected-color: #2563eb;
+    --st-selected-border-color: #2563eb;
+    --st-editable-cell-focus-border-color: #2563eb;
+    --st-focus-ring-color: #2563eb;
+    --st-button-hover-background-color: #eff6ff;
+    --st-button-active-background-color: #2563eb;
+    --st-button-active-text-color: #ffffff;
+    --st-next-prev-btn-color: #475569;
+    --st-next-prev-btn-disabled-color: #cbd5e1;
+    --st-page-btn-color: #475569;
+    --st-page-btn-hover-background-color: #eff6ff;
+    --st-checkbox-background-color: #ffffff;
+    --st-checkbox-checked-background-color: #2563eb;
+    --st-checkbox-checked-border-color: #2563eb;
+    --st-checkbox-border-color: #cbd5e1;
+    --st-column-editor-background-color: #ffffff;
+    --st-column-editor-popout-background-color: #ffffff;
+    --st-column-editor-text-color: #64748b;
+    --st-datepicker-weekday-color: #64748b;
+    --st-datepicker-other-month-color: #cbd5e1;
+    --st-filter-button-disabled-background-color: #f1f5f9;
+    --st-filter-button-disabled-text-color: #94a3b8;
+    --st-muted-text-color: #94a3b8;
+    --st-cell-flash-color: #dbeafe;
+    --st-copy-flash-color: #3b82f6;
+    --st-warning-flash-color: #fda4af;
+    --st-tooltip-background-color: #0f172a;
+    --st-tooltip-text-color: #ffffff;
+    --st-tooltip-border-radius: 8px;
+    --st-tooltip-padding: 7px 10px;
+    --st-tooltip-font-size: 11px;
+    --st-tooltip-shadow: 0 10px 24px rgb(15 23 42 / 0.2);
+    --st-header-selected-background-color: #2563eb;
+    --st-header-selected-label-color: #ffffff;
+    --st-header-selected-icon-color: #ffffff;
+    --st-header-highlight-indicator-color: #dbeafe;
+    --st-selection-highlight-indicator-color: #cbd5e1;
+    --st-loading-skeleton-bg-color: #e2e8f0;
+    --st-chart-color: #3b82f6;
+    --st-chart-fill-color: #dbeafe;
+    --st-drag-separator-color: #2563eb;
+}
+
+.theme-custom .st-wrapper {
+    box-shadow: 0 7px 24px rgb(15 23 42 / 0.035);
+}
+
+.theme-custom .st-header-label {
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+}
+
+.theme-custom .st-cell-content {
+    min-width: 0;
+    width: 100%;
+    font-size: 12px;
+}
+
+.theme-custom .st-cell.finbase-st-total-row {
+    border-top: 1px solid #cbd5e1;
+    background: #f8fafc;
+}
+
+.finbase-st-actions {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
+.finbase-st-actions button {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    border: 0;
+    border-radius: 8px;
+    color: #94a3b8;
+    background: transparent;
+    cursor: pointer;
+}
+
+.finbase-st-actions button:hover { color: #2563eb; background: #eff6ff; }
+.finbase-st-actions .finbase-st-action-danger:hover { color: #e11d48; background: #fff1f2; }
+
+.finbase-st-money-cell {
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    font-weight: 650;
+    text-align: right;
+    cursor: pointer;
+}
+
+.finbase-st-money-cell:disabled { cursor: default; }
+.finbase-st-money-cell:not(:disabled):hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* Theme switcher */
 .theme-toggle {
@@ -357,8 +498,7 @@ html.dark .theme-toggle__item:hover { color: #e2e8f0; background: #273449; }
 html.dark .theme-toggle__item--active { color: #bfdbfe; background: #334155; box-shadow: 0 2px 10px rgb(0 0 0 / 0.35); }
 
 html.dark .surface-card,
-html.dark .summary-card,
-html.dark .data-table-wrap {
+html.dark .summary-card {
     border-color: rgb(51 65 85 / 0.9);
     background: rgb(15 23 42 / 0.96);
     box-shadow: 0 12px 38px rgb(0 0 0 / 0.2);
@@ -446,6 +586,83 @@ html.dark .hover\:bg-gray-100:hover { background-color: #1e293b !important; }
 html.dark .hover\:bg-blue-50:hover { background-color: #172554 !important; }
 html.dark .fill-gray-700 { fill: #cbd5e1 !important; }
 html.dark .fill-gray-500 { fill: #94a3b8 !important; }
+
+html.dark .theme-custom {
+    --st-scrollbar-bg-color: #0f172a;
+    --st-scrollbar-thumb-color: #475569;
+    --st-border-color: #334155;
+    --st-body-background-color: #0f172a;
+    --st-footer-background-color: #111827;
+    --st-footer-text-color: #94a3b8;
+    --st-last-group-row-separator-border-color: #475569;
+    --st-odd-row-background-color: #0f172a;
+    --st-even-row-background-color: #0f172a;
+    --st-hover-row-background-color: #172554;
+    --st-selected-row-background-color: #1e3a8a;
+    --st-odd-column-background-color: #0f172a;
+    --st-even-column-background-color: #0f172a;
+    --st-header-background-color: #111827;
+    --st-sub-header-background-color: #1e293b;
+    --st-header-label-color: #94a3b8;
+    --st-header-icon-color: #64748b;
+    --st-cell-color: #cbd5e1;
+    --st-cell-odd-row-color: #cbd5e1;
+    --st-edit-cell-shadow: 0 10px 28px rgb(0 0 0 / 0.35);
+    --st-sub-cell-background-color: #111827;
+    --st-sub-cell-hover-background-color: #172554;
+    --st-selected-cell-background-color: #1e3a8a;
+    --st-selected-first-cell-background-color: #172554;
+    --st-selected-cell-color: #f8fafc;
+    --st-selected-first-cell-color: #f8fafc;
+    --st-selected-sub-cell-background-color: #1e40af;
+    --st-selected-sub-cell-color: #dbeafe;
+    --st-dragging-background-color: #172554;
+    --st-dragging-sub-header-background-color: #1e3a8a;
+    --st-resize-handle-color: #475569;
+    --st-resize-handle-selected-color: #60a5fa;
+    --st-selected-border-color: #60a5fa;
+    --st-editable-cell-focus-border-color: #60a5fa;
+    --st-focus-ring-color: #60a5fa;
+    --st-button-hover-background-color: #1e293b;
+    --st-button-active-background-color: #3b82f6;
+    --st-button-active-text-color: #ffffff;
+    --st-next-prev-btn-color: #cbd5e1;
+    --st-next-prev-btn-disabled-color: #475569;
+    --st-page-btn-color: #cbd5e1;
+    --st-page-btn-hover-background-color: #1e293b;
+    --st-checkbox-background-color: #111827;
+    --st-checkbox-checked-background-color: #3b82f6;
+    --st-checkbox-checked-border-color: #3b82f6;
+    --st-checkbox-border-color: #475569;
+    --st-column-editor-background-color: #111827;
+    --st-column-editor-popout-background-color: #111827;
+    --st-column-editor-text-color: #94a3b8;
+    --st-datepicker-weekday-color: #94a3b8;
+    --st-datepicker-other-month-color: #475569;
+    --st-filter-button-disabled-background-color: #1e293b;
+    --st-filter-button-disabled-text-color: #64748b;
+    --st-muted-text-color: #64748b;
+    --st-cell-flash-color: #1e40af;
+    --st-copy-flash-color: #60a5fa;
+    --st-warning-flash-color: #fb7185;
+    --st-tooltip-background-color: #f8fafc;
+    --st-tooltip-text-color: #0f172a;
+    --st-tooltip-shadow: 0 10px 28px rgb(0 0 0 / 0.45);
+    --st-header-selected-background-color: #3b82f6;
+    --st-header-selected-label-color: #ffffff;
+    --st-header-selected-icon-color: #ffffff;
+    --st-header-highlight-indicator-color: #1e3a8a;
+    --st-selection-highlight-indicator-color: #475569;
+    --st-loading-skeleton-bg-color: #334155;
+    --st-chart-color: #60a5fa;
+    --st-chart-fill-color: #1e40af;
+    --st-drag-separator-color: #60a5fa;
+}
+
+html.dark .theme-custom .st-wrapper { box-shadow: 0 12px 38px rgb(0 0 0 / 0.2); }
+html.dark .theme-custom .st-cell.finbase-st-total-row { border-top-color: #475569; background: #111827; }
+html.dark .finbase-st-actions button:hover { color: #93c5fd; background: #172554; }
+html.dark .finbase-st-actions .finbase-st-action-danger:hover { color: #fda4af; background: rgb(136 19 55 / 0.34); }
 @media (max-width: 700px) {
     .theme-toggle { margin-left: auto; }
     .theme-toggle__item { width: 27px; height: 27px; }
