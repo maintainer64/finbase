@@ -1,0 +1,15 @@
+services:
+  finbase_web:
+    environment:
+      FINBASE_HTTPS_ADDR: ${FINBASE_HTTPS_ADDR:-0.0.0.0:8443}
+      FINBASE_TLS_CERT_FILE: ${FINBASE_TLS_CERT_FILE:-/certs/fullchain.pem}
+      FINBASE_TLS_KEY_FILE: ${FINBASE_TLS_KEY_FILE:-/certs/privkey.pem}
+    volumes:
+      - type: bind
+        source: ${FINBASE_TLS_CERTS_DIR:-./certs}
+        target: /certs
+        read_only: true
+        bind:
+          create_host_path: false
+    ports: !override
+      - "8443:8443"

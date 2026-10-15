@@ -40,3 +40,6 @@ coverage/
 
 # Versioned backend and extension archives
 release-assets/
+
+# Local TLS certificates and private keys
+/backend/certs/

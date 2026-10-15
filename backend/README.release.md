@@ -40,3 +40,33 @@ OIDC настраивается переменными `FINBASE_OIDC_ISSUER`, `F
 backend, сделайте резервную копию папки и замените только бинарник, сохранив
 данные. Для доступа с других устройств нужны отдельная настройка адреса
 прослушивания, HTTPS и авторизации; по умолчанию сервер слушает только localhost.
+
+## HTTPS без reverse proxy
+
+Укажите собственный сертификат и приватный ключ через окружение. PowerShell:
+
+```powershell
+$env:FINBASE_HTTPS_ADDR = "0.0.0.0:8443"
+$env:FINBASE_TLS_CERT_FILE = "C:\Finbase\certs\fullchain.pem"
+$env:FINBASE_TLS_KEY_FILE = "C:\Finbase\certs\privkey.pem"
+.\finbase.exe serve --dir=.\pb_data
+```
+
+Linux/macOS:
+
+```bash
+FINBASE_HTTPS_ADDR=0.0.0.0:8443 \
+FINBASE_TLS_CERT_FILE=/certs/fullchain.pem \
+FINBASE_TLS_KEY_FILE=/certs/privkey.pem \
+./finbase serve --dir=./pb_data
+```
+
+Нужны все три переменные вместе. Сертификат с полной цепочкой и соответствующий
+ключ должны быть в PEM; ключ — без пароля. `.env` автоматически не читается.
+В этом режиме обычный HTTP не запускается, `--http` игнорируется. Не добавляйте
+`--https` или аргумент домена для автоматического TLS PocketBase.
+Некорректная TLS-конфигурация приводит к ошибке запуска, не к откату на HTTP.
+
+В расширении укажите `https://ваш-домен:8443`. Сертификат должен соответствовать
+домену и быть доверенным в браузере. После обновления файлов перезапустите
+backend. При OIDC добавьте callback `https://ваш-домен:8443/api/oauth2-redirect`.

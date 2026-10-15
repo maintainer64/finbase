@@ -1,3 +1,7 @@
 pb_data
 *.log
 .git
+certs
+*.pem
+*.key
+.env

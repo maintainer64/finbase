@@ -1,3 +1,4 @@
+# Direct HTTPS: add -f docker-compose.https.yaml (see README).
 services:
   finbase_web:
     image: ghcr.io/maintainer64/finbase_web:latest
@@ -17,5 +18,8 @@ services:
       FINBASE_DEMO_DAYS: ${FINBASE_DEMO_DAYS:-180}
       FINBASE_TRANSFER_WINDOW_MINUTES: ${FINBASE_TRANSFER_WINDOW_MINUTES:-30}
       FINBASE_TIMEZONE_OFFSET: ${FINBASE_TIMEZONE_OFFSET:-+05:00}
+      FINBASE_HTTPS_ADDR: ${FINBASE_HTTPS_ADDR:-}
+      FINBASE_TLS_CERT_FILE: ${FINBASE_TLS_CERT_FILE:-}
+      FINBASE_TLS_KEY_FILE: ${FINBASE_TLS_KEY_FILE:-}
     ports:
       - "8080:8080"

@@ -22,7 +22,7 @@ func main() {
 		Automigrate: osutils.IsProbablyGoRun(),
 	})
 
-	if err := app.Start(); err != nil {
+	if err := startFinbase(app); err != nil {
 		log.Fatal(err)
 	}
 }
