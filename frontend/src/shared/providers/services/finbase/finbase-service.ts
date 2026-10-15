@@ -97,6 +97,10 @@ export class FinbaseService implements ProviderSync {
             body: body !== undefined ? JSON.stringify(body) : undefined,
         });
         if (!response.ok) {
+            if (response.status === 401) {
+                if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("finbase-session-invalid", {detail: {url: this.baseUrl, token}}));
+                throw new Error("Finbase: сеанс истёк или отозван. Войдите заново в настройках; это не пустая база данных.");
+            }
             const details = await response.text().catch(() => "");
             let message = details;
             try {

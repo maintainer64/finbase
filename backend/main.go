@@ -13,6 +13,7 @@ import (
 func main() {
 	app := pocketbase.New()
 	registerOIDC(app)
+	registerSessionGuard(app)
 	registerAutomation(app)
 	registerDemoCommand(app)
 	registerDemoEnv(app)

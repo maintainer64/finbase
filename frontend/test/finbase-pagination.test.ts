@@ -9,6 +9,12 @@ const token = "aaa.bbb.ccc";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("пагинация Finbase", () => {
+    it("не маскирует недействительный сеанс под пустую базу", async () => {
+        vi.stubGlobal("fetch", vi.fn(async () => new Response("Unauthorized", {status: 401})));
+        const service = new FinbaseService("https://finbase.example", token);
+        await expect(service.getTransfersPage(1, 20, "pending")).rejects.toThrow("сеанс истёк или отозван");
+    });
+
     it("запрашивает только одну страницу переводов с серверным фильтром", async () => {
         const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
             page: 1,

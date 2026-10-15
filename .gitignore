@@ -37,3 +37,6 @@ coverage/
 
 # TypeScript specific
 *.tsbuildinfo
+
+# Versioned backend and extension archives
+release-assets/

@@ -16,6 +16,7 @@ import {Toaster} from "solid-toast";
 import {currentWidth, setCurrentWidth} from "@/shared/width";
 import {useFullAppWindow} from "@/shared/open-finbase";
 import {useThemeController} from "@/shared/theme";
+import {FinbaseSessionGuard} from "@/shared/finbase/session-guard";
 
 
 const ROUTE_BY_KIND: Record<ProviderKind, "banks" | "shops"> = {
@@ -80,13 +81,13 @@ export const App: Component = () => {
                                 <SettingsPage/>
                             </Match>
                             <Match when={currentRoute() === "statistics"}>
-                                <StatisticsPage/>
+                                <FinbaseSessionGuard><StatisticsPage/></FinbaseSessionGuard>
                             </Match>
                             <Match when={currentRoute() === "data"}>
-                                <DataPage/>
+                                <FinbaseSessionGuard><DataPage/></FinbaseSessionGuard>
                             </Match>
                             <Match when={currentRoute() === "automation"}>
-                                <AutomationPage/>
+                                <FinbaseSessionGuard><AutomationPage/></FinbaseSessionGuard>
                             </Match>
                         </Switch>
                         <Toaster

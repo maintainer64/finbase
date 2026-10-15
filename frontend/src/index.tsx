@@ -1,4 +1,5 @@
 /* @refresh reload */
+import "./shared/platform/browser-shim";
 import { render } from "solid-js/web";
 
 import "@simple-table/solid/styles.css";

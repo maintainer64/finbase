@@ -88,6 +88,32 @@ docker compose exec finbase_web /pb/finbase superuser upsert \
   --dir=/pb/pb_data
 ```
 
+### Backend без Docker (готовые бинарники)
+
+В [GitHub Releases](https://github.com/maintainer64/finbase/releases) публикуются
+архивы backend для Windows, Linux и macOS, отдельно для amd64 и arm64.
+Windows-архив содержит `finbase.exe`, остальные — `finbase`; в каждом есть
+инструкция запуска. Go и Docker для запуска не нужны, SQLite и миграции уже
+включены. Это backend, а не приложение с отдельным desktop-окном: интерфейс
+Finbase по-прежнему открывается через расширение.
+
+На Windows распакуйте ZIP и выполните в PowerShell:
+
+```powershell
+.\finbase.exe serve --http=127.0.0.1:8080 --dir=.\pb_data
+```
+
+На Linux/macOS:
+
+```bash
+./finbase serve --http=127.0.0.1:8080 --dir=./pb_data
+```
+
+Проверка скачанных архивов: `sha256sum --check SHA256SUMS` (Linux) или
+`Get-FileHash .\finbase-backend-<version>-windows-amd64.zip -Algorithm SHA256`
+(PowerShell), с сопоставлением значения в `SHA256SUMS`. Сохраняйте `pb_data`
+при обновлении бинарника и делайте резервную копию перед запуском новой версии.
+
 ### Demo-данные
 
 Однократное заполнение всех рабочих коллекций:
@@ -248,7 +274,7 @@ go build ./...
 |---|---|---|
 | `integration.yml` | push/PR в `main` или `master`, вручную | Go format/vet/test/build, demo smoke, frontend lint/type-check/test/build и интеграция с PocketBase |
 | `docker-backend.yml` | изменения backend, version tag, вручную | multi-arch `linux/amd64` + `linux/arm64` image в GHCR; PR только собирается |
-| `release.yml` | tag `v*` или вручную для существующего тега | проверенный ZIP расширения, SHA-256 и GitHub Release |
+| `release.yml` | tag `v*` или вручную для существующего тега | проверенный ZIP расширения, 6 архивов backend (Windows/Linux/macOS × amd64/arm64), `SHA256SUMS` и GitHub Release |
 
 Workflow используют совместимые stable majors: `actions/checkout@v4`,
 `actions/setup-go@v5`, `pnpm/action-setup@v4`, `actions/setup-node@v4`,
@@ -263,5 +289,19 @@ git tag -a v1.2.0 -m 'Finbase v1.2.0'
 git push origin v1.2.0
 ```
 
-`release.yml` завершится ошибкой, если тег и версия пакета различаются. Version
-tag одновременно публикует контейнер с semver-тегами и `latest`.
+`release.yml` завершится ошибкой, если тег и версия пакета различаются. Перед
+публикацией запускаются frontend lint/type-check/test/build и Go format/vet/test.
+Бинарники кросс-компилируются обычным Go на Ubuntu с `CGO_ENABLED=0`; отдельные
+Windows/macOS runners для сборки не требуются. Архивы и контрольные суммы
+прикрепляются к версии, а не публикуются на обычных push/PR. Ручной запуск также
+требует существующий версионный тег; теги с суффиксом публикуются как prerelease.
+Version tag одновременно публикует контейнер с semver-тегами и `latest`.
+
+Для локальной проверки сборки backend:
+
+```bash
+bash scripts/build-backend-release.sh v1.4.3 ./release-assets windows/amd64
+```
+
+Без последнего аргумента скрипт собирает все шесть платформ. Скрипт не создаёт
+тег и не публикует релиз.

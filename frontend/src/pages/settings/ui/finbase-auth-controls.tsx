@@ -92,7 +92,7 @@ export const FinbaseAuthControls: Component<{showUrl?: boolean}> = (props) => {
                     <div class="flex min-w-0 items-center gap-2 text-emerald-800">
                         <ShieldCheck size={19}/>
                         <div class="min-w-0">
-                            <div class="text-xs text-emerald-600">Подключено</div>
+                            <div class="text-xs text-emerald-600">Токен настроен; сеанс проверяется при открытии данных</div>
                             <div class="truncate text-sm font-medium">{authName() || "PocketBase"}</div>
                         </div>
                     </div>
